@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.council/
+*.sqlite
+*.sqlite-*
+*.tsbuildinfo
+.DS_Store

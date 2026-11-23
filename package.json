@@ -1,0 +1,28 @@
+{
+  "name": "council-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local lead-directed coding agent team orchestrating Codex, Claude Code, and Antigravity CLI sessions",
+  "bin": {
+    "council": "./dist/src/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:web": "npm --prefix web run build",
+    "build:all": "npm run build && npm run build:web",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test dist/test/*.test.js",
+    "serve": "node dist/src/cli/index.js serve",
+    "dev:check": "tsx src/cli/index.ts check",
+    "dev:delegate": "tsx src/cli/index.ts delegate",
+    "dev:verify-m2": "tsx src/cli/index.ts verify-m2",
+    "dev:serve": "tsx src/cli/index.ts serve",
+    "dev:web": "npm --prefix web run dev"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2"
+  }
+}
