@@ -2,7 +2,7 @@
 
 A local web app that gets **Claude Code**, **Codex**, and **Antigravity (`agy`)** to work on a question together, using the subscriptions you already pay for. One agent leads: it splits the work between teammates (or runs a roundtable discussion), reads their replies, and writes a final answer with citations back to who said what.
 
-Everything runs on your machine. Council drives the official CLIs you have installed and signed in to. It never sees your passwords or API keys, and each run's quota comes out of your own plans.
+Council runs on your machine and drives the official CLIs you have installed and signed in to. It never sees your passwords or API keys, and each run's quota comes out of your own plans. Your chats are stored locally, but the agents themselves are cloud services: your prompts, and the names and contents of the files you choose to share, are sent to Anthropic, OpenAI and Google through their CLIs, as with using those CLIs directly.
 
 ## What you need
 

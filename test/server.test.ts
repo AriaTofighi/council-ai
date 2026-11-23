@@ -312,3 +312,50 @@ test("projects API saves folders by real path, dedupes, and removes without touc
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("server only answers its own UI: foreign origins and rebound hosts are refused", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "council-origin-"));
+  const instance = createCouncilServer({ dbPath: path.join(tmp, "db.sqlite"), port: 0, staticDir: tmp });
+  const { url } = await instance.start();
+  const port = new URL(url).port;
+  const http = await import("node:http");
+  // fetch() won't let us forge Host, so use a raw request for the rebinding case.
+  const raw = (headers: Record<string, string>, method = "GET", p = "/api/chats") =>
+    new Promise<{ status: number; headers: import("node:http").IncomingHttpHeaders }>((resolve, reject) => {
+      const req = http.request({ host: "127.0.0.1", port, path: p, method, headers }, (res) => {
+        res.resume();
+        resolve({ status: res.statusCode ?? 0, headers: res.headers });
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  try {
+    // Same-origin / no-Origin requests (the UI itself, curl, the CLI) work.
+    assert.equal((await raw({ host: `127.0.0.1:${port}` })).status, 200);
+    assert.equal((await raw({ host: `localhost:${port}` })).status, 200);
+
+    // A local dev UI on another port is allowed, and only that origin is echoed back.
+    const dev = await raw({ host: `127.0.0.1:${port}`, origin: "http://localhost:5173" });
+    assert.equal(dev.status, 200);
+    assert.equal(dev.headers["access-control-allow-origin"], "http://localhost:5173");
+
+    // Any other website is refused, including its CORS preflight.
+    const foreign = await raw({ host: `127.0.0.1:${port}`, origin: "https://evil.example" });
+    assert.equal(foreign.status, 403);
+    assert.equal(foreign.headers["access-control-allow-origin"], undefined);
+    const preflight = await raw(
+      { host: `127.0.0.1:${port}`, origin: "https://evil.example", "access-control-request-method": "POST" },
+      "OPTIONS",
+      "/api/chats",
+    );
+    assert.equal(preflight.status, 403);
+    assert.equal((await raw({ host: `127.0.0.1:${port}`, origin: "null" })).status, 403);
+
+    // DNS rebinding: a public name resolving to 127.0.0.1 still sends its own Host.
+    assert.equal((await raw({ host: `evil.example:${port}` })).status, 403);
+    assert.equal((await raw({ host: `evil.example:${port}` }, "GET", "/")).status, 403);
+  } finally {
+    await instance.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

@@ -31,6 +31,43 @@ const MIME_TYPES: Record<string, string> = {
   ".ico": "image/x-icon",
 };
 
+const LOCAL_HOSTNAME = /^(localhost|[a-z0-9-]+\.localhost|127\.\d+\.\d+\.\d+|\[::1\])$/i;
+const IP_LITERAL = /^(\d{1,3}(\.\d{1,3}){3}|\[[0-9a-f:.]+\])$/i;
+
+function hostnameOf(hostHeader: string): string {
+  return hostHeader.startsWith("[") ? hostHeader.slice(0, hostHeader.indexOf("]") + 1) : hostHeader.split(":")[0]!;
+}
+
+/**
+ * Returns a reason to refuse the request, or undefined if it comes from the local UI.
+ * - Host must be a loopback name or an IP literal, which defeats DNS rebinding
+ *   (a public domain pointed at 127.0.0.1 still sends its own name as Host).
+ * - For /api/*, a browser Origin must be loopback or this same host; requests with no
+ *   Origin (curl, the CLI, same-origin GETs) are allowed.
+ */
+export function rejectForeignRequest(req: IncomingMessage, pathname: string): string | undefined {
+  const hostHeader = req.headers.host ?? "";
+  const hostname = hostnameOf(hostHeader);
+  if (!hostname || !(LOCAL_HOSTNAME.test(hostname) || IP_LITERAL.test(hostname))) {
+    return "Council only accepts requests addressed to this machine";
+  }
+  if (!pathname.startsWith("/api/")) return undefined;
+  const origin = req.headers.origin;
+  if (origin === undefined) return undefined;
+  let originUrl: URL;
+  try {
+    originUrl = new URL(origin);
+  } catch {
+    return "Council only accepts requests from its own UI";
+  }
+  const sameHost = originUrl.host === hostHeader;
+  const loopback = LOCAL_HOSTNAME.test(originUrl.hostname); // URL keeps IPv6 brackets: "[::1]"
+  if (!(originUrl.protocol === "http:" || originUrl.protocol === "https:") || !(sameHost || loopback)) {
+    return "Council only accepts requests from its own UI";
+  }
+  return undefined;
+}
+
 function sendJson(
   res: ServerResponse,
   statusCode: number,
@@ -167,9 +204,21 @@ export function createCouncilServer(
     const parsedUrl = new URL(req.url ?? "/", `http://${host}`);
     const pathname = parsedUrl.pathname;
 
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type,Last-Event-ID");
+    // Only the local UI may use this server. Other websites the user has open must not be
+    // able to read chats, inspect folders, or start runs on their subscriptions.
+    const blocked = rejectForeignRequest(req, pathname);
+    if (blocked) {
+      sendJson(res, 403, { error: blocked });
+      return;
+    }
+    const origin = req.headers.origin;
+    if (origin) {
+      // Reflect only already-vetted local origins (e.g. the Vite dev server on another port).
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Last-Event-ID");
+    }
     if (method === "OPTIONS") {
       res.writeHead(204);
       res.end();
@@ -256,12 +305,6 @@ export function createCouncilServer(
     }
 
     if (method === "POST" && pathname === "/api/workspace/pick") {
-      // Opens a dialog on this machine, so only the local UI may trigger it.
-      const origin = req.headers.origin;
-      if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin)) {
-        sendJson(res, 403, { error: "Folder picker is only available to the local UI" });
-        return;
-      }
       const body = await readJsonBody<{ startDir?: string }>(req);
       let startDir = body.startDir?.trim() || undefined;
       if (startDir && !fs.existsSync(startDir)) startDir = undefined;

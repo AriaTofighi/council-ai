@@ -222,7 +222,7 @@ Options:
   --team <list>                Comma-separated teammate providers (default: codex)
   --mode <mode>                divide_conquer (default) or roundtable
   --independent-openings       In roundtable mode, collect blind opening positions in parallel
-  --prompt <text>              User request for the lead
+  --prompt <text>              User request for the lead (required)
   --workspace <dir>            Create and share a read-only repo snapshot across all agents
   --teammate-fixture <path>    Private constraint/reference file visible ONLY to teammates
   --lead-model <id>            Model override for the lead
@@ -246,9 +246,13 @@ Options:
   const teamProviders = parseProviderList(getStringFlag(parsed, "team") ?? "codex");
   const mode = parseModeFlag(getStringFlag(parsed, "mode"));
   const independentFirstOpinions = getBooleanFlag(parsed, "independent-openings");
-  const prompt =
-    getStringFlag(parsed, "prompt") ??
-    "Propose a weekend cutover plan to migrate BillingService from /v1/invoices to /v2/invoices and immediately turn off /v1/invoices. Check with your team first for any client constraints before finalizing the plan.";
+  const prompt = getStringFlag(parsed, "prompt")?.trim();
+  // Every run spends the user's subscription quota, so never run a built-in example by default.
+  if (!prompt) {
+    console.error('Missing --prompt. Example: council delegate --prompt "Review the auth flow" --workspace .');
+    console.error('Run "council delegate --help" for all options.');
+    return 1;
+  }
   const fixturePath = getStringFlag(parsed, "teammate-fixture");
   const privateContext = fixturePath
     ? fs.readFileSync(path.resolve(fixturePath), "utf8")

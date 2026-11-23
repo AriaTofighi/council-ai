@@ -498,7 +498,16 @@ export const App: React.FC = () => {
       setWorkspacePath(res.sourcePath);
       if (keepSelection) {
         const available = new Set(res.files.map((f) => f.path));
-        setSelectedPaths((prev) => prev.filter((p) => available.has(p)));
+        setSelectedPaths((prev) => {
+          const kept = prev.filter((p) => available.has(p));
+          // An empty list means "all files"; don't widen a selection without saying so.
+          if (prev.length > 0 && kept.length === 0) {
+            toast.warning("Your saved file selection no longer exists", {
+              description: "All files in the repository are selected. Untick any you don’t want shared.",
+            });
+          }
+          return kept;
+        });
       } else {
         setSelectedPaths([]);
       }

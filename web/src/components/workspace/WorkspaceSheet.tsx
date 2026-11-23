@@ -68,17 +68,18 @@ export const WorkspaceSheet: React.FC<WorkspaceSheetProps> = ({
     return q ? inspection.files.filter((f) => f.path.toLowerCase().includes(q)) : inspection.files;
   }, [inspection, filter]);
 
+  // An empty selection means "every file", so never let unticking produce one:
+  // the last ticked file stays ticked (clear the repository to share nothing).
   const toggleFile = (filePath: string) => {
-    if (selectedPaths.length === 0 && inspection) {
-      onChangeSelectedPaths(inspection.files.map((f) => f.path).filter((p) => p !== filePath));
-      return;
-    }
-    onChangeSelectedPaths(
-      selectedPaths.includes(filePath)
-        ? selectedPaths.filter((p) => p !== filePath)
-        : [...selectedPaths, filePath],
-    );
+    const current = selectedPaths.length === 0 && inspection ? inspection.files.map((f) => f.path) : selectedPaths;
+    const next = current.includes(filePath) ? current.filter((p) => p !== filePath) : [...current, filePath];
+    if (next.length === 0) return;
+    onChangeSelectedPaths(inspection && next.length === inspection.files.length ? [] : next);
   };
+  const lastTicked = (filePath: string) =>
+    selectedPaths.length === 1
+      ? selectedPaths[0] === filePath
+      : selectedPaths.length === 0 && inspection?.files.length === 1;
 
   const repoName = workspacePath.split("/").filter(Boolean).pop();
   const attached = Boolean(workspacePath.trim());
@@ -228,7 +229,12 @@ export const WorkspaceSheet: React.FC<WorkspaceSheetProps> = ({
                           <label className="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 hover:bg-accent">
                             <Checkbox
                               checked={checked}
-                              disabled={disabled}
+                              disabled={disabled || (checked && lastTicked(f.path))}
+                              title={
+                                checked && lastTicked(f.path)
+                                  ? "At least one file is shared. To share none, clear the repository."
+                                  : undefined
+                              }
                               onCheckedChange={() => toggleFile(f.path)}
                             />
                             <span

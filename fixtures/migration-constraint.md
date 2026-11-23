@@ -1,3 +1,5 @@
+<!-- Fictional example used by `council verify-m2` to test private teammate context. Not real client data. -->
+
 # Client Migration Constraint Audit: BillingService (`/v1/invoices` -> `/v2/invoices`)
 
 ## Verified Client Findings
