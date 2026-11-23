@@ -31,3 +31,7 @@ npm run dev:verify-m2
 
 ## Executable Path Overrides
 Override CLI locations via `--codex-path`, `--claude-path`, `--agy-path`, or environment variables (`COUNCIL_CODEX_PATH`, `COUNCIL_CLAUDE_PATH`, `COUNCIL_AGY_PATH`).
+
+## License
+
+MIT — see [LICENSE](LICENSE).

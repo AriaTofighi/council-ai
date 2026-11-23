@@ -2,6 +2,7 @@
   "name": "council-ai",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Local lead-directed coding agent team orchestrating Codex, Claude Code, and Antigravity CLI sessions",
   "bin": {
