@@ -193,6 +193,13 @@ export interface HydratedRun {
   completedAt?: string;
 }
 
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  path: string;
+  createdAt: string;
+}
+
 export interface ChatRecord {
   id: string;
   title: string;

@@ -1,0 +1,168 @@
+/*
+ * Council design tokens.
+ *
+ * Two layers:
+ *   1. Primitives (--ref-*) — the raw palette. Only this file references them.
+ *   2. Semantic tokens (--background, --signal, --provider-codex …) — what the
+ *      Tailwind bridge in globals.css and all components consume.
+ *
+ * Aesthetic: Scandinavian warm-paper neutrals + graphite ink, one cool "signal"
+ * accent for live/interactive state, and muted Nordic tones for providers.
+ */
+
+:root {
+  /* ── Primitives ─────────────────────────────────────────── */
+  --ref-paper-0: oklch(1 0 0);
+  --ref-paper-50: oklch(0.988 0.0025 95);
+  --ref-paper-100: oklch(0.972 0.003 95);
+  --ref-paper-150: oklch(0.955 0.0035 95);
+  --ref-paper-200: oklch(0.93 0.004 95);
+
+  --ref-ink-950: oklch(0.145 0.005 265);
+  --ref-ink-900: oklch(0.175 0.006 265);
+  --ref-ink-850: oklch(0.205 0.007 265);
+  --ref-ink-800: oklch(0.24 0.008 265);
+  --ref-ink-700: oklch(0.32 0.008 265);
+  --ref-ink-500: oklch(0.52 0.009 265);
+  --ref-ink-400: oklch(0.64 0.008 265);
+
+  --ref-fjord-400: oklch(0.74 0.13 240);
+  --ref-fjord-500: oklch(0.6 0.17 252);
+  --ref-moss-500: oklch(0.64 0.12 155);
+  --ref-moss-400: oklch(0.74 0.12 155);
+  --ref-amber-500: oklch(0.72 0.14 72);
+  --ref-amber-400: oklch(0.8 0.13 78);
+  --ref-ember-500: oklch(0.6 0.19 27);
+  --ref-ember-400: oklch(0.7 0.16 25);
+
+  --ref-clay: oklch(0.66 0.115 48);
+  --ref-sage: oklch(0.63 0.085 172);
+  --ref-lilac: oklch(0.62 0.12 288);
+  --ref-clay-light: oklch(0.76 0.1 52);
+  --ref-sage-light: oklch(0.76 0.08 172);
+  --ref-lilac-light: oklch(0.75 0.1 290);
+
+  /* ── Typography & shape ─────────────────────────────────── */
+  --font-family-sans: "Geist Variable", -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", "Inter", system-ui, sans-serif;
+  --font-family-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo,
+    monospace;
+  --tracking-body: -0.006em;
+  --tracking-tight: -0.022em;
+  --radius: 0.4rem;
+
+  /* ── Motion ─────────────────────────────────────────────── */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --duration-fast: 140ms;
+  --duration-base: 260ms;
+  --duration-slow: 480ms;
+
+  /* ── Semantic: light ────────────────────────────────────── */
+  --background: var(--ref-paper-50);
+  --foreground: var(--ref-ink-850);
+  --card: var(--ref-paper-0);
+  --card-foreground: var(--ref-ink-850);
+  --popover: var(--ref-paper-0);
+  --popover-foreground: var(--ref-ink-850);
+
+  --primary: var(--ref-ink-850);
+  --primary-foreground: var(--ref-paper-50);
+  --secondary: var(--ref-paper-150);
+  --secondary-foreground: var(--ref-ink-850);
+  --muted: var(--ref-paper-100);
+  --muted-foreground: var(--ref-ink-500);
+  --subtle-foreground: var(--ref-ink-400);
+  --accent: oklch(0.21 0.006 265 / 0.05);
+  --accent-foreground: var(--ref-ink-850);
+
+  --border: oklch(0.21 0.006 265 / 0.085);
+  --border-strong: oklch(0.21 0.006 265 / 0.16);
+  --input: oklch(0.21 0.006 265 / 0.12);
+  --ring: var(--ref-fjord-500);
+
+  --signal: var(--ref-fjord-500);
+  --signal-foreground: var(--ref-paper-0);
+  --signal-soft: oklch(0.6 0.17 252 / 0.12);
+  --success: var(--ref-moss-500);
+  --success-soft: oklch(0.64 0.12 155 / 0.12);
+  --warning: var(--ref-amber-500);
+  --warning-soft: oklch(0.72 0.14 72 / 0.14);
+  --destructive: var(--ref-ember-500);
+  --destructive-soft: oklch(0.6 0.19 27 / 0.1);
+  --destructive-foreground: var(--ref-paper-0);
+
+  --provider-claude: var(--ref-clay);
+  --provider-codex: var(--ref-sage);
+  --provider-agy: var(--ref-lilac);
+
+  --sidebar: var(--ref-paper-100);
+  --sidebar-foreground: var(--ref-ink-850);
+  --sidebar-accent: oklch(0.21 0.006 265 / 0.06);
+  --sidebar-border: oklch(0.21 0.006 265 / 0.07);
+
+  --glass: oklch(1 0 0 / 0.72);
+  --glass-border: oklch(0.21 0.006 265 / 0.08);
+  --glass-blur: 24px;
+  --glass-saturate: 180%;
+
+
+  --elevation-1: 0 1px 0 0 oklch(0.21 0.006 265 / 0.02);
+  --elevation-2: 0 1px 2px oklch(0.21 0.006 265 / 0.04);
+  --elevation-3: 0 2px 8px -2px oklch(0.21 0.006 265 / 0.08);
+  --elevation-4: 0 8px 24px -8px oklch(0.21 0.006 265 / 0.14);
+}
+
+.dark {
+  --background: var(--ref-ink-950);
+  --foreground: oklch(0.955 0.003 95);
+  --card: var(--ref-ink-900);
+  --card-foreground: oklch(0.955 0.003 95);
+  --popover: var(--ref-ink-850);
+  --popover-foreground: oklch(0.955 0.003 95);
+
+  --primary: oklch(0.955 0.003 95);
+  --primary-foreground: var(--ref-ink-900);
+  --secondary: var(--ref-ink-800);
+  --secondary-foreground: oklch(0.955 0.003 95);
+  --muted: var(--ref-ink-850);
+  --muted-foreground: oklch(0.7 0.007 265);
+  --subtle-foreground: oklch(0.56 0.008 265);
+  --accent: oklch(1 0 0 / 0.06);
+  --accent-foreground: oklch(0.955 0.003 95);
+
+  --border: oklch(1 0 0 / 0.075);
+  --border-strong: oklch(1 0 0 / 0.14);
+  --input: oklch(1 0 0 / 0.1);
+  --ring: var(--ref-fjord-400);
+
+  --signal: var(--ref-fjord-400);
+  --signal-foreground: var(--ref-ink-950);
+  --signal-soft: oklch(0.74 0.13 240 / 0.16);
+  --success: var(--ref-moss-400);
+  --success-soft: oklch(0.74 0.12 155 / 0.14);
+  --warning: var(--ref-amber-400);
+  --warning-soft: oklch(0.8 0.13 78 / 0.14);
+  --destructive: var(--ref-ember-400);
+  --destructive-soft: oklch(0.7 0.16 25 / 0.14);
+  --destructive-foreground: var(--ref-ink-950);
+
+  --provider-claude: var(--ref-clay-light);
+  --provider-codex: var(--ref-sage-light);
+  --provider-agy: var(--ref-lilac-light);
+
+  --sidebar: oklch(0.165 0.006 265);
+  --sidebar-foreground: oklch(0.955 0.003 95);
+  --sidebar-accent: oklch(1 0 0 / 0.06);
+  --sidebar-border: oklch(1 0 0 / 0.06);
+
+  --glass: oklch(0.19 0.006 265 / 0.7);
+  --glass-border: oklch(1 0 0 / 0.08);
+
+
+  --elevation-1: none;
+  --elevation-2: 0 1px 2px oklch(0 0 0 / 0.3);
+  --elevation-3: 0 4px 12px -4px oklch(0 0 0 / 0.5);
+  --elevation-4: 0 12px 32px -8px oklch(0 0 0 / 0.6);
+}

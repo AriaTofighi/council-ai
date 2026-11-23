@@ -1,10 +1,18 @@
 import React from "react";
-import ReactDOM from "react-dom/client";
+import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import "./styles.css";
+import { ThemeProvider } from "./theme/theme-provider";
+import { TooltipProvider } from "./components/ui/tooltip";
+import { Toaster } from "./components/ui/sonner";
+import "./styles/globals.css";
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
+createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <ThemeProvider>
+      <TooltipProvider>
+        <App />
+        <Toaster />
+      </TooltipProvider>
+    </ThemeProvider>
   </React.StrictMode>,
 );

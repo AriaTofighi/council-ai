@@ -11,6 +11,7 @@ import { checkProviders, type AdapterRegistry } from "../providers/registry.js";
 import { CouncilDatabase, type StoredRunEvent } from "../storage/db.js";
 import type { ProviderId } from "../types/provider.js";
 import { inspectWorkspace } from "../workspace/snapshot.js";
+import { pickFolder } from "./folder-picker.js";
 import {
   CouncilRunManager,
   type StartTurnRequest,
@@ -129,6 +130,8 @@ export interface CreateCouncilServerOptions {
   snapshotRootDir?: string;
   adapters?: AdapterRegistry;
   executableOverrides?: Partial<Record<ProviderId, string>>;
+  /** Override the native folder picker (tests). */
+  pickFolder?: typeof pickFolder;
 }
 
 export interface CouncilServerInstance {
@@ -232,6 +235,58 @@ export function createCouncilServer(
           error: err instanceof Error ? err.message : String(err),
         });
       }
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/workspace/pick") {
+      // Opens a dialog on this machine, so only the local UI may trigger it.
+      const origin = req.headers.origin;
+      if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin)) {
+        sendJson(res, 403, { error: "Folder picker is only available to the local UI" });
+        return;
+      }
+      const body = await readJsonBody<{ startDir?: string }>(req);
+      let startDir = body.startDir?.trim() || undefined;
+      if (startDir && !fs.existsSync(startDir)) startDir = undefined;
+      const result = await (options.pickFolder ?? pickFolder)({ startDir });
+      sendJson(res, result.status === "unsupported" ? 501 : 200, result);
+      return;
+    }
+
+    if (method === "GET" && pathname === "/api/projects") {
+      sendJson(res, 200, { projects: db.listProjects() });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/projects") {
+      const body = await readJsonBody<{ path?: string; name?: string }>(req);
+      const raw = body.path?.trim();
+      if (!raw) {
+        sendJson(res, 400, { error: "Project path is required" });
+        return;
+      }
+      let realPath: string;
+      try {
+        // Same normalization as workspace snapshots, so chats group under the project by path.
+        realPath = fs.realpathSync(path.resolve(raw));
+        if (!fs.statSync(realPath).isDirectory()) throw new Error("not a directory");
+      } catch {
+        sendJson(res, 400, { error: `Not a folder: ${raw}` });
+        return;
+      }
+      const project = db.createProject({
+        id: `proj_${crypto.randomUUID().slice(0, 8)}`,
+        name: body.name?.trim() || path.basename(realPath) || realPath,
+        path: realPath,
+      });
+      sendJson(res, 201, { project });
+      return;
+    }
+
+    const projectMatch = /^\/api\/projects\/([^/]+)$/.exec(pathname);
+    if (projectMatch && method === "DELETE") {
+      const deleted = db.deleteProject(decodeURIComponent(projectMatch[1]!));
+      sendJson(res, deleted ? 200 : 404, deleted ? { deleted: true } : { error: "Project not found" });
       return;
     }
 

@@ -228,3 +228,87 @@ test("HTTP + SSE server executes turns, replays SSE afterSeq, supports stop, and
     fs.rmSync(tmpStatic, { recursive: true, force: true });
   }
 });
+
+test("folder picker endpoint returns the chosen folder and rejects foreign origins", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "council-pick-"));
+  const calls: Array<{ startDir?: string }> = [];
+  const instance = createCouncilServer({
+    dbPath: path.join(tmp, "db.sqlite"),
+    port: 0,
+    staticDir: tmp,
+    pickFolder: async (opts) => {
+      calls.push(opts ?? {});
+      return { status: "picked", path: "/picked/repo" };
+    },
+  });
+  const { url } = await instance.start();
+  try {
+    const ok = await fetch(`${url}/api/workspace/pick`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://localhost:5175" },
+      body: JSON.stringify({ startDir: tmp }),
+    });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(await ok.json(), { status: "picked", path: "/picked/repo" });
+    assert.equal(calls[0]?.startDir, tmp);
+
+    const missingStart = await fetch(`${url}/api/workspace/pick`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startDir: path.join(tmp, "nope") }),
+    });
+    assert.equal(missingStart.status, 200);
+    assert.equal(calls[1]?.startDir, undefined);
+
+    const foreign = await fetch(`${url}/api/workspace/pick`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+      body: "{}",
+    });
+    assert.equal(foreign.status, 403);
+    assert.equal(calls.length, 2);
+  } finally {
+    await instance.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("projects API saves folders by real path, dedupes, and removes without touching chats", async () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "council-proj-")));
+  const repo = path.join(tmp, "my-repo");
+  fs.mkdirSync(repo);
+  const instance = createCouncilServer({ dbPath: path.join(tmp, "db.sqlite"), port: 0, staticDir: tmp });
+  const { url } = await instance.start();
+  const post = (body: unknown) =>
+    fetch(`${url}/api/projects`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  try {
+    const created = await post({ path: `${repo}/` });
+    assert.equal(created.status, 201);
+    const { project } = (await created.json()) as { project: { id: string; name: string; path: string } };
+    assert.equal(project.name, "my-repo");
+    assert.equal(project.path, repo);
+
+    const again = (await (await post({ path: repo })).json()) as { project: { id: string } };
+    assert.equal(again.project.id, project.id);
+
+    assert.equal((await post({ path: path.join(tmp, "missing") })).status, 400);
+
+    await fetch(`${url}/api/chats`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "In project", workspacePath: repo }),
+    });
+    const listed = (await (await fetch(`${url}/api/projects`)).json()) as { projects: unknown[] };
+    assert.equal(listed.projects.length, 1);
+
+    const del = await fetch(`${url}/api/projects/${project.id}`, { method: "DELETE" });
+    assert.equal(del.status, 200);
+    const after = (await (await fetch(`${url}/api/projects`)).json()) as { projects: unknown[] };
+    assert.equal(after.projects.length, 0);
+    const chats = (await (await fetch(`${url}/api/chats`)).json()) as { chats: Array<{ title: string }> };
+    assert.ok(chats.chats.some((c) => c.title === "In project"));
+  } finally {
+    await instance.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

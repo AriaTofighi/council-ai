@@ -1,0 +1,196 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "./tokens.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Tailwind bridge — every utility reads from the semantic tokens in tokens.css.
+ * Components never reference raw colors; change tokens.css to re-theme.
+ */
+@theme inline {
+  --font-sans: var(--font-family-sans);
+  --font-mono: var(--font-family-mono);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-signal: var(--signal);
+  --color-signal-foreground: var(--signal-foreground);
+  --color-signal-soft: var(--signal-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--destructive);
+  --color-danger-soft: var(--destructive-soft);
+
+  --color-provider-claude: var(--provider-claude);
+  --color-provider-codex: var(--provider-codex);
+  --color-provider-agy: var(--provider-agy);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-border: var(--sidebar-border);
+
+  --color-glass: var(--glass);
+  --color-glass-border: var(--glass-border);
+
+  --radius-xs: calc(var(--radius) * 0.35);
+  --radius-sm: calc(var(--radius) * 0.55);
+  --radius-md: calc(var(--radius) * 0.75);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.35);
+  --radius-2xl: calc(var(--radius) * 1.75);
+
+  --shadow-xs: var(--elevation-1);
+  --shadow-sm: var(--elevation-2);
+  --shadow-md: var(--elevation-3);
+  --shadow-lg: var(--elevation-4);
+
+  --ease-out: var(--ease-out-expo);
+  --ease-spring: var(--ease-spring);
+
+  --animate-pulse-soft: pulse-soft 2.4s var(--ease-in-out) infinite;
+  --animate-rise: rise var(--duration-base) var(--ease-out-expo) both;
+
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.82); }
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/40;
+  }
+  html {
+    color-scheme: light;
+    -webkit-text-size-adjust: 100%;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "ss01", "cv11";
+    text-rendering: optimizeLegibility;
+    letter-spacing: var(--tracking-body);
+  }
+  ::selection {
+    background: var(--signal-soft);
+    color: var(--foreground);
+  }
+  code, kbd, pre, samp {
+    @apply font-mono;
+  }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Frosted surface used for floating chrome (composer, headers, popovers). */
+@utility glass {
+  background: var(--glass);
+  border-color: var(--glass-border);
+  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+}
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+/* Small section label — sentence case, never all caps. */
+@utility eyebrow {
+  @apply text-xs font-medium text-muted-foreground;
+}
+/* Thin, unobtrusive scrollbars. */
+@utility scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* Long-form agent output. Calm, readable measure; all colors from tokens. */
+@layer components {
+  .prose-council {
+    @apply text-sm leading-[1.65] text-foreground;
+    overflow-wrap: anywhere;
+  }
+  .prose-council > * + * { margin-top: 0.75em; }
+  .prose-council h3,
+  .prose-council h4,
+  .prose-council h5,
+  .prose-council h6 {
+    @apply font-semibold text-foreground;
+    letter-spacing: var(--tracking-tight);
+    margin-top: 1.4em;
+  }
+  .prose-council > :first-child { margin-top: 0; }
+  .prose-council h3 { @apply text-[1.0625rem]; }
+  .prose-council h4 { @apply text-[0.9375rem]; }
+  .prose-council h5,
+  .prose-council h6 { @apply eyebrow; }
+  .prose-council strong { @apply font-semibold; }
+  .prose-council a {
+    @apply text-signal underline decoration-signal/30 underline-offset-2 transition-colors hover:decoration-signal;
+  }
+  .prose-council ul,
+  .prose-council ol { @apply space-y-1 pl-5; }
+  .prose-council ul { @apply list-disc; }
+  .prose-council ol { @apply list-decimal; }
+  .prose-council li::marker { @apply text-subtle-foreground; }
+  .prose-council :not(pre) > code {
+    @apply rounded-[3px] bg-muted px-[0.3em] py-[0.1em] font-mono text-[0.84em];
+  }
+  .prose-council pre.md-code {
+    @apply relative overflow-x-auto rounded-md border border-border bg-muted p-4 font-mono text-[0.8125rem] leading-relaxed;
+  }
+  .prose-council .md-code-lang {
+    @apply eyebrow absolute right-3 top-2 font-normal text-subtle-foreground;
+  }
+  .prose-council .md-table-wrap {
+    @apply overflow-x-auto rounded-md border border-border;
+  }
+  .prose-council table { @apply w-full border-collapse text-[0.8125rem]; }
+  .prose-council th { @apply bg-muted px-3 py-2 text-left font-medium text-muted-foreground; }
+  .prose-council td { @apply border-t border-border px-3 py-2 align-top; }
+}
+
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition: none !important;
+}

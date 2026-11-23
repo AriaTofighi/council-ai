@@ -1,4 +1,5 @@
 import React from "react";
+import { CitePill } from "./turn/CitePill";
 
 interface MarkdownViewProps {
   text: string;
@@ -33,15 +34,7 @@ function renderInline(
         const hashCite = /^#((?:t\d+_)?c_\d+)$/.exec(target);
         if (hashCite && validCitationIds?.has(hashCite[1]!) && onCiteClick) {
           parts.push(
-            <button
-              key={match.index}
-              type="button"
-              className="cite-pill"
-              onClick={() => onCiteClick(hashCite[1]!)}
-              title={`Inspect contribution ${hashCite[1]!}`}
-            >
-              {label}
-            </button>,
+            <CitePill key={match.index} id={hashCite[1]!} label={label} onClick={() => onCiteClick(hashCite[1]!)} />,
           );
         } else if (/^https?:\/\//i.test(target)) {
           parts.push(
@@ -63,15 +56,7 @@ function renderInline(
       const cleanId = token.replace(/^\[|\]$/g, "");
       if (validCitationIds?.has(cleanId) && onCiteClick) {
         parts.push(
-          <button
-            key={match.index}
-            type="button"
-            className="cite-pill"
-            onClick={() => onCiteClick(cleanId)}
-            title={`Inspect contribution ${cleanId}`}
-          >
-            {cleanId}
-          </button>,
+          <CitePill key={match.index} id={cleanId} onClick={() => onCiteClick(cleanId)} />,
         );
       } else {
         parts.push(token);
@@ -227,5 +212,5 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({
     i += 1;
   }
 
-  return <div className="markdown-body">{elements}</div>;
+  return <div className="prose-council">{elements}</div>;
 };

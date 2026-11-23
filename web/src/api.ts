@@ -6,21 +6,43 @@ import type {
   ProviderCatalogEntry,
   ProviderCheckResult,
   ProviderId,
+  ProjectRecord,
   StoredRunEvent,
   WorkspaceInspection,
 } from "./types";
 
+/** Thrown when the local Council service can't be reached (not running, or proxy failed). */
+export class ServiceUnavailableError extends Error {
+  constructor() {
+    super("The Council service isn’t running");
+    this.name = "ServiceUnavailableError";
+  }
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-  const data = (await res.json()) as T & { error?: string };
-  if (!res.ok) {
-    throw new Error(data.error || `HTTP ${res.status}`);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch {
+    throw new ServiceUnavailableError();
+  }
+  const body = await res.text();
+  let data: (T & { error?: string }) | null = null;
+  try {
+    data = body ? (JSON.parse(body) as T & { error?: string }) : null;
+  } catch {
+    data = null;
+  }
+  if (!res.ok || data === null) {
+    // The Vite dev proxy answers 5xx with an empty/non-JSON body when the backend is down.
+    if (data === null && (res.status >= 500 || res.status === 0)) throw new ServiceUnavailableError();
+    throw new Error(data?.error || `Request failed (HTTP ${res.status})`);
   }
   return data;
 }
@@ -56,6 +78,46 @@ export async function inspectWorkspaceApi(
     },
   );
   return res.inspection;
+}
+
+export type FolderPickResult =
+  | { status: "picked"; path: string }
+  | { status: "cancelled" }
+  | { status: "unsupported"; reason: string };
+
+/** Asks the local Council service to open the OS folder chooser. */
+export async function pickFolderApi(startDir?: string): Promise<FolderPickResult> {
+  let res: Response;
+  try {
+    res = await fetch("/api/workspace/pick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startDir }),
+    });
+  } catch {
+    throw new ServiceUnavailableError();
+  }
+  const data = (await res.json().catch(() => null)) as (FolderPickResult & { error?: string }) | null;
+  if (!data) throw new ServiceUnavailableError();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+export async function listProjectsApi(): Promise<ProjectRecord[]> {
+  const res = await requestJson<{ projects: ProjectRecord[] }>("/api/projects");
+  return res.projects;
+}
+
+export async function createProjectApi(projectPath: string): Promise<ProjectRecord> {
+  const res = await requestJson<{ project: ProjectRecord }>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify({ path: projectPath }),
+  });
+  return res.project;
+}
+
+export async function deleteProjectApi(projectId: string): Promise<void> {
+  await requestJson(`/api/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
 }
 
 export async function listChatsApi(): Promise<ChatRecord[]> {

@@ -30,6 +30,14 @@ export interface ChatRecord {
   updatedAt: string;
 }
 
+/** A saved folder that chats can be started in; chats belong to it by matching workspace path. */
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  path: string;
+  createdAt: string;
+}
+
 export interface StoredRunRecord {
   id: string;
   chatId: string;
@@ -118,6 +126,13 @@ export class CouncilDatabase {
 
   private migrate(): void {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS chats (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -268,6 +283,37 @@ export class CouncilDatabase {
       createdAt: now,
       updatedAt: now,
     };
+  }
+
+  listProjects(): ProjectRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM projects ORDER BY name COLLATE NOCASE")
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(toProject);
+  }
+
+  getProjectByPath(projectPath: string): ProjectRecord | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM projects WHERE path = ?")
+      .get(projectPath) as Record<string, unknown> | undefined;
+    return row ? toProject(row) : undefined;
+  }
+
+  /** Saves a project, or returns the existing one for the same path. */
+  createProject(params: { id: string; name: string; path: string }): ProjectRecord {
+    const existing = this.getProjectByPath(params.path);
+    if (existing) return existing;
+    const now = nowIso();
+    this.db
+      .prepare("INSERT INTO projects (id, name, path, created_at) VALUES (?, ?, ?, ?)")
+      .run(params.id, params.name, params.path, now);
+    return { ...params, createdAt: now };
+  }
+
+  /** Forgets the saved folder only; its chats are kept. */
+  deleteProject(projectId: string): boolean {
+    const res = this.db.prepare("DELETE FROM projects WHERE id = ?").run(projectId);
+    return Number(res.changes) > 0;
   }
 
   listChats(): ChatRecord[] {
@@ -998,4 +1044,13 @@ export class CouncilDatabase {
       throw err;
     }
   }
+}
+
+function toProject(r: Record<string, unknown>): ProjectRecord {
+  return {
+    id: String(r.id),
+    name: String(r.name),
+    path: String(r.path),
+    createdAt: String(r.created_at),
+  };
 }
