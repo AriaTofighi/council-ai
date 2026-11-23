@@ -55,7 +55,8 @@ export const TurnView: React.FC<TurnViewProps> = ({
 
       {running && <LiveProgress run={run} events={liveEvents} />}
 
-      {run.finalAnswer && (
+      {/* While a retry or re-synthesis runs, the previous answer and errors are stale. */}
+      {!running && run.finalAnswer && (
         <section>
           <MarkdownView text={run.finalAnswer} validCitationIds={validContributionIds} onCiteClick={openCitation} />
           {run.usedContributionIds.length > 0 && (
@@ -68,7 +69,7 @@ export const TurnView: React.FC<TurnViewProps> = ({
         </section>
       )}
 
-      {run.participantSummaries.length > 0 && (
+      {!running && run.participantSummaries.length > 0 && (
         <ul className="space-y-1.5">
           {run.participantSummaries.map((s) => {
             const p = participant(s.participant_id);
@@ -84,9 +85,9 @@ export const TurnView: React.FC<TurnViewProps> = ({
         </ul>
       )}
 
-      {run.disagreements.length > 0 && <Note tone="warning" title="Disagreements" items={run.disagreements} />}
-      {run.unresolvedIssues.length > 0 && <Note tone="neutral" title="Unresolved" items={run.unresolvedIssues} />}
-      {run.errorMessage && <Note tone="danger" title="Error" items={[run.errorMessage]} />}
+      {!running && run.disagreements.length > 0 && <Note tone="warning" title="Disagreements" items={run.disagreements} />}
+      {!running && run.unresolvedIssues.length > 0 && <Note tone="neutral" title="Unresolved" items={run.unresolvedIssues} />}
+      {!running && run.errorMessage && <Note tone="danger" title="Error" items={[run.errorMessage]} />}
 
       {!running && (retryable.length > 0 || (canSynthesize && !run.finalAnswer)) && (
         <div className="flex flex-wrap items-center gap-1">

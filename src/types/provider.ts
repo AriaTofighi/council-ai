@@ -6,6 +6,10 @@ export interface ProviderModelOption {
   id: string;
   label: string;
   provider: ProviderId;
+  /** Thinking levels the CLI accepts for this model, lowest first. Empty = no --effort allowed. */
+  efforts: ReasoningEffort[];
+  /** Level the CLI uses when none is passed, if it reports one. */
+  defaultEffort?: ReasoningEffort;
   supportsEffort: boolean;
   isFast?: boolean;
 }

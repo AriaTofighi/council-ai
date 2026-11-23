@@ -1,5 +1,6 @@
 import type {
   ChatRecord,
+  CliUpdateStatus,
   HydratedRun,
   OrchestrationMode,
   ParticipantSpec,
@@ -7,6 +8,7 @@ import type {
   ProviderCheckResult,
   ProviderId,
   ProjectRecord,
+  ProviderUsage,
   StoredRunEvent,
   WorkspaceInspection,
 } from "./types";
@@ -47,11 +49,25 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
-export async function fetchProviders(): Promise<ProviderCatalogEntry[]> {
-  const res = await requestJson<{ providers: ProviderCatalogEntry[] }>(
+export async function fetchProviders(): Promise<{
+  providers: ProviderCatalogEntry[];
+  cliUpdates: CliUpdateStatus[];
+}> {
+  const res = await requestJson<{ providers: ProviderCatalogEntry[]; cliUpdates?: CliUpdateStatus[] }>(
     "/api/providers",
   );
-  return res.providers;
+  return { providers: res.providers, cliUpdates: res.cliUpdates ?? [] };
+}
+
+/** Each subscription's 5-hour / weekly usage, as its CLI reports it. */
+export async function fetchUsageApi(refresh = false): Promise<ProviderUsage[]> {
+  const res = await requestJson<{ usage: ProviderUsage[] }>(`/api/usage${refresh ? "?refresh=1" : ""}`);
+  return res.usage;
+}
+
+export async function updateClisApi(): Promise<CliUpdateStatus[]> {
+  const res = await requestJson<{ cliUpdates: CliUpdateStatus[] }>("/api/providers/update", { method: "POST" });
+  return res.cliUpdates;
 }
 
 export async function checkProvidersApi(
@@ -161,11 +177,12 @@ export async function startTurnApi(
     workspacePath?: string;
     selectedPaths?: string[];
     allowReadOnlyTools: boolean;
+    /** null on a numeric field = no limit. */
     limits: {
-      maxLeadCalls: number;
-      maxTotalCalls: number;
-      perCallTimeoutMs: number;
-      hardDeadlineMs: number;
+      maxLeadCalls: number | null;
+      maxTotalCalls: number | null;
+      perCallTimeoutMs: number | null;
+      hardDeadlineMs: number | null;
       reserveSynthesisCall: boolean;
     };
   },
@@ -220,6 +237,7 @@ export function subscribeRunEvents(
   afterSeq: number,
   onEvent: (stored: StoredRunEvent) => void,
   onError?: () => void,
+  options: { sinceResume?: boolean } = {},
 ): () => void {
   let closed = false;
   let lastSeq = afterSeq;
@@ -228,7 +246,7 @@ export function subscribeRunEvents(
 
   const connect = () => {
     if (closed) return;
-    const url = `/api/runs/${encodeURIComponent(runId)}/events?afterSeq=${lastSeq}`;
+    const url = `/api/runs/${encodeURIComponent(runId)}/events?afterSeq=${lastSeq}${options.sinceResume ? "&sinceResume=1" : ""}`;
     es = new EventSource(url);
     const eventTypes = [
       "run_started",
@@ -244,6 +262,8 @@ export function subscribeRunEvents(
       "contribution_retrieved",
       "session_fallback",
       "diagnostic",
+      "agent_activity",
+      "run_resumed",
       "run_finished",
     ];
     for (const type of eventTypes) {

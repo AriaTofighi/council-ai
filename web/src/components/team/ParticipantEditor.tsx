@@ -3,7 +3,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Hint } from "@/components/ui/tooltip";
 import { PROVIDER_IDS, ProviderMark } from "@/lib/providers";
-import { isEffortLocked } from "@/lib/run-config";
+import { modelEfforts } from "@/lib/run-config";
 import type { ParticipantSpec, ProviderCatalogEntry, ProviderId } from "@/types";
 import { EffortScale } from "./EffortScale";
 
@@ -27,7 +27,8 @@ export function ParticipantEditor({
   onRemove?: () => void;
 }) {
   const models = catalog.find((p) => p.id === participant.provider)?.models ?? [];
-  const locked = isEffortLocked(catalog, participant.provider, participant.model);
+  const levels = modelEfforts(catalog, participant.provider, participant.model);
+  const locked = levels.length === 0;
 
   return (
     <div className="group/p space-y-2 rounded-md border bg-card p-2.5">
@@ -77,7 +78,13 @@ export function ParticipantEditor({
         <Select
           value={participant.model ?? DEFAULT_MODEL}
           disabled={disabled}
-          onValueChange={(v) => onChange({ model: v === DEFAULT_MODEL ? undefined : v })}
+          onValueChange={(v) => {
+            const model = v === DEFAULT_MODEL ? undefined : v;
+            // Keep the current thinking level only if the new model accepts it.
+            const next = modelEfforts(catalog, participant.provider, model);
+            const effort = participant.effort && next.includes(participant.effort) ? participant.effort : undefined;
+            onChange({ model, effort });
+          }}
         >
           <SelectTrigger size="sm" aria-label="Model" className="h-7 min-w-0 flex-1 text-xs">
             <SelectValue />
@@ -94,7 +101,8 @@ export function ParticipantEditor({
         <EffortScale
           value={locked ? undefined : participant.effort}
           disabled={disabled}
-          lockedReason={locked ? "Set by the model" : undefined}
+          levels={levels}
+          lockedReason={locked ? "This model has no thinking levels" : undefined}
           onChange={(effort) => onChange({ effort })}
         />
       </div>

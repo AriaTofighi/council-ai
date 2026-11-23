@@ -8,6 +8,8 @@ import {
   listProviderModels,
 } from "../providers/models.js";
 import { checkProviders, type AdapterRegistry } from "../providers/registry.js";
+import { getCliUpdateStatuses, updateProviderClis } from "../providers/updater.js";
+import { getProviderUsage } from "../providers/usage.js";
 import { CouncilDatabase, type StoredRunEvent } from "../storage/db.js";
 import type { ProviderId } from "../types/provider.js";
 import { inspectWorkspace } from "../workspace/snapshot.js";
@@ -200,7 +202,22 @@ export function createCouncilServer(
           };
         }),
       );
-      sendJson(res, 200, { providers: entries });
+      sendJson(res, 200, { providers: entries, cliUpdates: getCliUpdateStatuses() });
+      return;
+    }
+
+    if (method === "GET" && pathname === "/api/usage") {
+      const usage = await getProviderUsage(["claude", "codex", "agy"], {
+        force: parsedUrl.searchParams.get("refresh") === "1",
+        executableOverrides: options.executableOverrides,
+      });
+      sendJson(res, 200, { usage });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/providers/update") {
+      void updateProviderClis({ executableOverrides: options.executableOverrides });
+      sendJson(res, 202, { cliUpdates: getCliUpdateStatuses() });
       return;
     }
 
@@ -377,7 +394,13 @@ export function createCouncilServer(
       const queryAfter = parsedUrl.searchParams.get("afterSeq");
       const rawAfter =
         queryAfter ?? (typeof headerLast === "string" ? headerLast : "0");
-      const afterSeq = Math.max(0, Number.parseInt(rawAfter, 10) || 0);
+      // sinceResume=1 follows only the latest retry/re-synthesis, so an earlier
+      // run_finished in the history doesn't end the stream.
+      const afterSeq = Math.max(
+        0,
+        Number.parseInt(rawAfter, 10) || 0,
+        parsedUrl.searchParams.get("sinceResume") === "1" ? db.getResumeStartSeq(runId) : 0,
+      );
 
       res.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",

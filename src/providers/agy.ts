@@ -11,6 +11,7 @@ import type {
 } from "../types/provider.js";
 import { classifyProcessFailure } from "./classify.js";
 import { discoverProviderExecutable } from "./discovery.js";
+import { cachedModelEfforts } from "./models.js";
 import { ActiveProcessTracker, runCliProcess } from "./process.js";
 import {
   normalizeUsage,
@@ -181,9 +182,13 @@ export function buildAgyArgs(
     args.push("--model", handle.model);
   }
 
+  // A per-level slug already fixes the effort, and some models (e.g. Orchestrator)
+  // reject --effort entirely; agy fails the whole call in either case.
+  const knownEfforts = handle.model ? cachedModelEfforts("agy", handle.model) : undefined;
   if (
     handle.effort &&
-    !(handle.model && TIERED_AGY_SLUG_RE.test(handle.model))
+    !(handle.model && TIERED_AGY_SLUG_RE.test(handle.model)) &&
+    (!knownEfforts || knownEfforts.includes(handle.effort))
   ) {
     args.push("--effort", handle.effort);
   }

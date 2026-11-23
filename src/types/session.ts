@@ -83,7 +83,17 @@ export interface PriorTurnContext {
   contributions: PriorTurnContribution[];
 }
 
+/** Run budget. `null` on any numeric field means "no limit". */
 export interface RunLimits {
+  maxLeadCalls: number | null;
+  maxTotalCalls: number | null;
+  perCallTimeoutMs: number | null;
+  hardDeadlineMs: number | null;
+  reserveSynthesisCall: boolean;
+}
+
+/** RunLimits as the orchestrator uses them: "no limit" becomes Infinity. */
+export interface EffectiveRunLimits {
   maxLeadCalls: number;
   maxTotalCalls: number;
   perCallTimeoutMs: number;
@@ -198,6 +208,23 @@ export type RunEvent =
       type: "diagnostic";
       runId: string;
       diagnostic: RunDiagnostic;
+    }
+  | {
+      /** What an agent is doing right now (tool calls, status, writing). Throttled. */
+      type: "agent_activity";
+      runId: string;
+      participantId: string;
+      provider: ProviderId;
+      kind: "tool" | "status" | "writing" | "error";
+      detail?: string;
+    }
+  | {
+      /** A finished run is working again (retrying an assignment or re-synthesizing). */
+      type: "run_resumed";
+      runId: string;
+      reason: "retry" | "synthesize";
+      participantId?: string;
+      assignmentId?: string;
     }
   | {
       type: "run_finished";

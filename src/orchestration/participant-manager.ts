@@ -72,7 +72,9 @@ export class ParticipantManager {
     if (!entry) {
       throw new Error(`Unknown participant "${participantId}"`);
     }
-    return entry.adapter.sendTurn(entry.handle, input);
+    // "No limit" reaches here as Infinity; adapters expect 0 for "no timeout".
+    const timeoutMs = Number.isFinite(input.timeoutMs) && input.timeoutMs > 0 ? input.timeoutMs : 0;
+    return entry.adapter.sendTurn(entry.handle, { ...input, timeoutMs });
   }
 
   cancelAll(): void {

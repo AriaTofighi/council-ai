@@ -1,4 +1,5 @@
 import path from "node:path";
+import { updateProviderClis } from "../providers/updater.js";
 import { createCouncilServer } from "../server/server.js";
 import {
   getBooleanFlag,
@@ -22,7 +23,9 @@ Options:
   --static-dir <dir>     Frontend build directory (default: web/dist)
   --codex-path <path>    Override codex executable path
   --claude-path <path>   Override claude executable path
-  --agy-path <path>      Override agy executable path`);
+  --agy-path <path>      Override agy executable path
+  --no-update-clis       Don't update the claude, codex and agy CLIs on startup
+                         (also: COUNCIL_SKIP_CLI_UPDATE=1)`);
     return 0;
   }
 
@@ -43,6 +46,13 @@ Options:
   const bound = await instance.start();
   console.log(`Council local service listening at ${bound.url}`);
   console.log(`SQLite storage: ${dbPath}`);
+
+  // Keep the agent CLIs current so new models and thinking levels show up in the UI.
+  const skipUpdates =
+    getBooleanFlag(parsed, "no-update-clis") || /^(1|true|yes)$/i.test(process.env.COUNCIL_SKIP_CLI_UPDATE ?? "");
+  if (!skipUpdates) {
+    void updateProviderClis({ executableOverrides });
+  }
 
   const shutdown = async () => {
     console.log("\nShutting down Council server...");

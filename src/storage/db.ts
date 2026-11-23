@@ -501,7 +501,8 @@ export class CouncilDatabase {
       leadActions?: LeadActionRecord[];
       diagnostics?: RunDiagnostic[];
       userDecisions?: string[];
-      errorMessage?: string;
+      /** Passing the key (even as undefined/null) sets it; a run that recovers clears its error. */
+      errorMessage?: string | null;
       elapsedMs?: number;
       completedAt?: string;
     },
@@ -548,8 +549,8 @@ export class CouncilDatabase {
         JSON.stringify(patch.leadActions ?? current.leadActions),
         JSON.stringify(patch.diagnostics ?? current.diagnostics),
         JSON.stringify(patch.userDecisions ?? current.userDecisions),
-        patch.errorMessage !== undefined
-          ? patch.errorMessage
+        "errorMessage" in patch
+          ? (patch.errorMessage ?? null)
           : current.errorMessage ?? null,
         patch.elapsedMs !== undefined
           ? patch.elapsedMs
@@ -952,6 +953,17 @@ export class CouncilDatabase {
       event: JSON.parse(String(r.payload_json)) as RunEvent,
       createdAt: String(r.created_at),
     }));
+  }
+
+  /** Seq just before the latest run_resumed event (0 if the run was never resumed). */
+  getResumeStartSeq(runId: string): number {
+    const rows = this.db
+      .prepare("SELECT seq, payload_json FROM run_events WHERE run_id = ? ORDER BY seq DESC")
+      .all(runId) as Array<Record<string, unknown>>;
+    for (const r of rows) {
+      if (String(r.payload_json).includes('"type":"run_resumed"')) return Number(r.seq) - 1;
+    }
+    return 0;
   }
 
   getHydratedRun(runId: string): HydratedRun | undefined {

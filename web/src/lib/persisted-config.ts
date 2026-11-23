@@ -32,6 +32,21 @@ export const DEFAULT_CONFIG: PersistedConfig = {
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isParticipant = (v: unknown): v is ParticipantSpec => isObject(v) && typeof v.provider === "string";
 
+const limitOrNone = (v: unknown, fallback: number | null): number | null =>
+  v === undefined ? fallback : typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+
+function readLimits(raw: Record<string, unknown>): RunLimitsForm {
+  const d = DEFAULT_LIMITS;
+  return {
+    maxLeadCalls: limitOrNone(raw.maxLeadCalls, d.maxLeadCalls),
+    maxTotalCalls: limitOrNone(raw.maxTotalCalls, d.maxTotalCalls),
+    perCallTimeoutMs: limitOrNone(raw.perCallTimeoutMs, d.perCallTimeoutMs),
+    hardDeadlineMs: limitOrNone(raw.hardDeadlineMs, d.hardDeadlineMs),
+    reserveSynthesisCall:
+      typeof raw.reserveSynthesisCall === "boolean" ? raw.reserveSynthesisCall : d.reserveSynthesisCall,
+  };
+}
+
 /** Reads the saved config, falling back field-by-field to defaults for anything missing or malformed. */
 export function loadConfig(): PersistedConfig {
   let raw: unknown;
@@ -50,7 +65,7 @@ export function loadConfig(): PersistedConfig {
     independentFirstOpinions:
       typeof raw.independentFirstOpinions === "boolean" ? raw.independentFirstOpinions : d.independentFirstOpinions,
     allowReadOnlyTools: typeof raw.allowReadOnlyTools === "boolean" ? raw.allowReadOnlyTools : d.allowReadOnlyTools,
-    limits: isObject(raw.limits) ? { ...d.limits, ...(raw.limits as Partial<RunLimitsForm>) } : d.limits,
+    limits: isObject(raw.limits) ? readLimits(raw.limits) : d.limits,
     workspacePath: typeof raw.workspacePath === "string" ? raw.workspacePath : d.workspacePath,
     selectedPaths: Array.isArray(raw.selectedPaths)
       ? raw.selectedPaths.filter((p): p is string => typeof p === "string")

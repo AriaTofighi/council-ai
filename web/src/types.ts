@@ -13,8 +13,20 @@ export interface ProviderModelOption {
   id: string;
   label: string;
   provider: ProviderId;
+  /** Thinking levels the CLI accepts for this model, lowest first. Empty = none. */
+  efforts: ReasoningEffort[];
+  defaultEffort?: ReasoningEffort;
   supportsEffort: boolean;
   isFast?: boolean;
+}
+
+export interface CliUpdateStatus {
+  provider: ProviderId;
+  state: "pending" | "updating" | "updated" | "current" | "failed" | "skipped";
+  versionBefore?: string;
+  versionAfter?: string;
+  message?: string;
+  finishedAt?: string;
 }
 
 export interface EffectiveReadOnlyPolicy {
@@ -169,6 +181,7 @@ export interface HydratedRun {
     model?: string;
     effort?: ReasoningEffort;
   }>;
+  limits?: { perCallTimeoutMs?: number; hardDeadlineMs?: number; maxLeadCalls?: number; maxTotalCalls?: number };
   allowReadOnlyTools: boolean;
   snapshot?: WorkspaceSnapshotSummary;
   finalAnswer?: string;
@@ -216,4 +229,22 @@ export interface StoredRunEvent {
     [key: string]: unknown;
   };
   createdAt: string;
+}
+
+export interface UsageWindow {
+  label: string;
+  kind: "5h" | "weekly" | "other";
+  usedPercent: number;
+  resetsAt?: string;
+  resetsText?: string;
+}
+
+export interface ProviderUsage {
+  provider: ProviderId;
+  ok: boolean;
+  plan?: string;
+  groups: Array<{ name?: string; description?: string; windows: UsageWindow[] }>;
+  notes: string[];
+  error?: string;
+  fetchedAt: string;
 }

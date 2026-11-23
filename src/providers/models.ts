@@ -7,93 +7,165 @@ import type {
   EffectiveReadOnlyPolicy,
   ProviderId,
   ProviderModelOption,
+  ReasoningEffort,
 } from "../types/provider.js";
 import { discoverProviderExecutable } from "./discovery.js";
 
 const execFileAsync = promisify(execFile);
 
-const AGY_CACHE_TTL_MS = 5 * 60 * 1000;
-const TIERED_AGY_SLUG_RE = /-(low|medium|high|xhigh|max)$/i;
+export const EFFORT_LEVELS: ReasoningEffort[] = ["low", "medium", "high", "xhigh", "max"];
+const ALL_EFFORTS = EFFORT_LEVELS;
+const TIERED_SLUG_RE = /^(.+)-(low|medium|high|xhigh|max)$/i;
+const LEVEL_LABEL_RE = /\s*\((low|medium|high|xhigh|max)\)\s*$/i;
 
-let cachedAgyModels:
-  | { fetchedAt: number; models: ProviderModelOption[] }
-  | undefined;
+/** Model lists are re-read from the CLIs this often, and immediately after a CLI update. */
+const MODEL_CACHE_TTL_MS = 2 * 60 * 1000;
+
+const modelCache = new Map<ProviderId, { fetchedAt: number; models: ProviderModelOption[] }>();
+
+/** Drops cached model lists so the next request re-reads them from the CLIs (call after updating a CLI). */
+export function invalidateModelCaches(): void {
+  modelCache.clear();
+}
+
+const isEffort = (v: unknown): v is ReasoningEffort =>
+  typeof v === "string" && (ALL_EFFORTS as string[]).includes(v);
+
+const sortEfforts = (efforts: Iterable<ReasoningEffort>): ReasoningEffort[] =>
+  [...new Set(efforts)].sort((a, b) => ALL_EFFORTS.indexOf(a) - ALL_EFFORTS.indexOf(b));
 
 const FALLBACK_CODEX_MODELS: ProviderModelOption[] = [
-  { id: "gpt-6.2-astra", label: "gpt-6.2-astra", provider: "codex", supportsEffort: true },
-  { id: "gpt-6.2-sol", label: "gpt-6.2-sol", provider: "codex", supportsEffort: true },
-  { id: "gpt-6.1-terra", label: "gpt-6.1-terra", provider: "codex", supportsEffort: true, isFast: true },
-  { id: "gpt-6-luna", label: "gpt-6-luna", provider: "codex", supportsEffort: true, isFast: true },
-];
+  "gpt-6.2-sol",
+  "gpt-6.2-astra",
+  "gpt-6.1-terra",
+  "gpt-6-luna",
+].map((id) => ({
+  id,
+  label: id,
+  provider: "codex",
+  efforts: ALL_EFFORTS,
+  supportsEffort: true,
+  isFast: /luna|terra/.test(id),
+}));
 
+// Claude Code takes aliases that always point at the latest model of each family.
 const CLAUDE_MODELS: ProviderModelOption[] = [
-  { id: "sonnet", label: "Claude Sonnet (alias)", provider: "claude", supportsEffort: true, isFast: true },
-  { id: "haiku", label: "Claude Haiku (alias)", provider: "claude", supportsEffort: true, isFast: true },
-  { id: "opus", label: "Claude Opus (alias)", provider: "claude", supportsEffort: true, isFast: false },
+  { id: "opus", label: "Claude Opus (latest)", provider: "claude", efforts: ALL_EFFORTS, supportsEffort: true },
+  { id: "fable", label: "Claude Fable (latest)", provider: "claude", efforts: ALL_EFFORTS, supportsEffort: true },
+  { id: "sonnet", label: "Claude Sonnet (latest)", provider: "claude", efforts: ALL_EFFORTS, supportsEffort: true, isFast: true },
+  { id: "haiku", label: "Claude Haiku (latest)", provider: "claude", efforts: ALL_EFFORTS, supportsEffort: true, isFast: true },
 ];
 
-const FALLBACK_AGY_MODELS: ProviderModelOption[] = [
-  { id: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)", provider: "agy", supportsEffort: false, isFast: true },
-  { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)", provider: "agy", supportsEffort: false, isFast: true },
-  { id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash (High)", provider: "agy", supportsEffort: false, isFast: true },
-  { id: "gemini-4-neon-low", label: "Gemini 4 Neon (Low)", provider: "agy", supportsEffort: false, isFast: true },
-  { id: "gemini-4-neon-medium", label: "Gemini 4 Neon (Medium)", provider: "agy", supportsEffort: false },
-  { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)", provider: "agy", supportsEffort: false },
-];
-
+/**
+ * `agy models` lists one row per model *and* thinking level (`gemini-4-neon-high`), plus
+ * models with no levels at all (`gemini-pro-orchestrator-neon`). agy accepts
+ * `--model <family> --effort <level>` for tiered families, rejects a conflicting
+ * `--effort` on a tiered slug, and rejects `--effort` entirely on untiered models.
+ * So we group tiered rows into one model per family with exactly the listed levels.
+ */
 export function parseAgyModelsOutput(stdout: string): ProviderModelOption[] {
-  const options: ProviderModelOption[] = [];
-  const seen = new Set<string>();
+  const families = new Map<string, { label: string; efforts: ReasoningEffort[] }>();
+  const order: string[] = [];
   for (const rawLine of stdout.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("Fetching")) continue;
     const match = /^([a-z0-9][a-z0-9._-]*)\s+(.+)$/i.exec(line);
     if (!match) continue;
-    const id = match[1]!;
+    const slug = match[1]!;
     const label = match[2]!.trim();
-    if (seen.has(id)) continue;
+    const tier = TIERED_SLUG_RE.exec(slug);
+    const id = tier ? tier[1]! : slug;
+    const level = tier ? (tier[2]!.toLowerCase() as ReasoningEffort) : undefined;
+    let family = families.get(id);
+    if (!family) {
+      family = { label: tier ? label.replace(LEVEL_LABEL_RE, "") : label, efforts: [] };
+      families.set(id, family);
+      order.push(id);
+    }
+    if (level) family.efforts.push(level);
+  }
+  return order.map((id) => {
+    const family = families.get(id)!;
+    const efforts = sortEfforts(family.efforts);
+    return {
+      id,
+      label: family.label,
+      provider: "agy" as const,
+      efforts,
+      supportsEffort: efforts.length > 0,
+      isFast: /flash|lite/i.test(id),
+    };
+  });
+}
+
+/** Parses the codex model catalog (`codex debug models` or ~/.codex/models_cache.json). */
+export function parseCodexCatalog(json: unknown): ProviderModelOption[] {
+  const items =
+    json && typeof json === "object" && Array.isArray((json as { models?: unknown }).models)
+      ? ((json as { models: Array<Record<string, unknown>> }).models)
+      : [];
+  const options: ProviderModelOption[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (!item || typeof item.slug !== "string") continue;
+    const id = item.slug.trim();
+    if (!id || seen.has(id) || item.visibility === "hide") continue;
     seen.add(id);
+    const levels = Array.isArray(item.supported_reasoning_levels)
+      ? item.supported_reasoning_levels
+          .map((l) => (l && typeof l === "object" ? (l as { effort?: unknown }).effort : l))
+          .filter(isEffort)
+      : [];
+    const efforts = levels.length > 0 ? sortEfforts(levels) : ALL_EFFORTS;
+    const displayName =
+      typeof item.display_name === "string" && item.display_name.trim() ? item.display_name.trim() : id;
     options.push({
       id,
-      label,
-      provider: "agy",
-      supportsEffort: !TIERED_AGY_SLUG_RE.test(id),
-      isFast: /flash|low/i.test(id) || /flash|\(low\)/i.test(label),
+      label: displayName,
+      provider: "codex",
+      efforts,
+      defaultEffort: isEffort(item.default_reasoning_level) ? item.default_reasoning_level : undefined,
+      supportsEffort: efforts.length > 0,
+      isFast: /luna|terra|mini|flash/i.test(id),
     });
   }
   return options;
 }
 
-function listCodexModelsFromCache(): ProviderModelOption[] {
-  const cachePath = path.join(os.homedir(), ".codex", "models_cache.json");
+async function fetchCodexModels(executablePath?: string): Promise<ProviderModelOption[]> {
+  // Prefer the live catalog from the installed CLI; fall back to its on-disk cache.
   try {
-    if (!fs.existsSync(cachePath)) return FALLBACK_CODEX_MODELS;
-    const parsed = JSON.parse(fs.readFileSync(cachePath, "utf8")) as {
-      models?: Array<Record<string, unknown>>;
-    };
-    const items = Array.isArray(parsed.models) ? parsed.models : [];
-    const options: ProviderModelOption[] = [];
-    const seen = new Set<string>();
-    for (const item of items) {
-      if (!item || typeof item.slug !== "string") continue;
-      const id = item.slug.trim();
-      if (!id || id === "codex-auto-review" || seen.has(id)) continue;
-      seen.add(id);
-      const displayName =
-        typeof item.display_name === "string" && item.display_name.trim()
-          ? item.display_name.trim()
-          : id;
-      options.push({
-        id,
-        label: displayName,
-        provider: "codex",
-        supportsEffort: true,
-        isFast: /luna|terra|mini|flash/i.test(id),
+    const discovery = await discoverProviderExecutable("codex", executablePath);
+    if (discovery.executablePath) {
+      const { stdout } = await execFileAsync(discovery.executablePath, ["debug", "models"], {
+        timeout: 15_000,
+        maxBuffer: 16 * 1024 * 1024,
       });
+      const parsed = parseCodexCatalog(JSON.parse(stdout));
+      if (parsed.length > 0) return parsed;
     }
-    return options.length > 0 ? options : FALLBACK_CODEX_MODELS;
   } catch {
-    return FALLBACK_CODEX_MODELS;
+    // fall through to the cache file
+  }
+  try {
+    const cachePath = path.join(os.homedir(), ".codex", "models_cache.json");
+    const parsed = parseCodexCatalog(JSON.parse(fs.readFileSync(cachePath, "utf8")));
+    if (parsed.length > 0) return parsed;
+  } catch {
+    // fall through to the static list
+  }
+  return FALLBACK_CODEX_MODELS;
+}
+
+async function fetchAgyModels(executablePath?: string): Promise<ProviderModelOption[] | undefined> {
+  try {
+    const discovery = await discoverProviderExecutable("agy", executablePath);
+    if (!discovery.executablePath) return undefined;
+    const { stdout } = await execFileAsync(discovery.executablePath, ["models"], { timeout: 20_000 });
+    const parsed = parseAgyModelsOutput(stdout);
+    return parsed.length > 0 ? parsed : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -101,32 +173,56 @@ export async function listProviderModels(
   provider: ProviderId,
   executablePath?: string,
 ): Promise<ProviderModelOption[]> {
-  if (provider === "codex") {
-    return listCodexModelsFromCache();
-  }
-  if (provider === "claude") {
-    return CLAUDE_MODELS;
-  }
+  if (provider === "claude") return CLAUDE_MODELS;
 
-  if (cachedAgyModels && Date.now() - cachedAgyModels.fetchedAt < AGY_CACHE_TTL_MS) {
-    return cachedAgyModels.models;
-  }
+  const cached = modelCache.get(provider);
+  if (cached && Date.now() - cached.fetchedAt < MODEL_CACHE_TTL_MS) return cached.models;
 
-  try {
-    const discovery = await discoverProviderExecutable("agy", executablePath);
-    if (!discovery.executablePath) return FALLBACK_AGY_MODELS;
-    const { stdout } = await execFileAsync(discovery.executablePath, ["models"], {
-      timeout: 8000,
-    });
-    const parsed = parseAgyModelsOutput(stdout);
-    if (parsed.length > 0) {
-      cachedAgyModels = { fetchedAt: Date.now(), models: parsed };
-      return parsed;
+  const models =
+    provider === "codex" ? await fetchCodexModels(executablePath) : await fetchAgyModels(executablePath);
+  if (models) {
+    modelCache.set(provider, { fetchedAt: Date.now(), models });
+    return models;
+  }
+  // agy unavailable right now: keep serving the last good list rather than inventing one.
+  return cached?.models ?? [];
+}
+
+/**
+ * Makes a model/effort pair valid for the CLI: maps agy per-level slugs
+ * (`gemini-4-neon-high`) to family + effort, and drops an effort the model doesn't accept.
+ */
+export function normalizeModelSelection(
+  provider: ProviderId,
+  model: string | undefined,
+  effort: ReasoningEffort | undefined,
+  models: ProviderModelOption[],
+): { model?: string; effort?: ReasoningEffort } {
+  if (!model) return { model, effort };
+  let id = model;
+  let level = effort;
+  let found = models.find((m) => m.id === id);
+  if (!found && provider === "agy") {
+    const tier = TIERED_SLUG_RE.exec(model);
+    const family = tier ? models.find((m) => m.id === tier[1]) : undefined;
+    if (tier && family) {
+      found = family;
+      id = family.id;
+      level = tier[2]!.toLowerCase() as ReasoningEffort;
     }
-  } catch {
-    // Fall back to static list if agy models fails
   }
-  return FALLBACK_AGY_MODELS;
+  if (!found) {
+    // Unknown model: pass through, but never pair a per-level agy slug with --effort.
+    return provider === "agy" && TIERED_SLUG_RE.test(model) ? { model } : { model, effort };
+  }
+  if (level && !found.efforts.includes(level)) level = undefined;
+  return { model: id, effort: level };
+}
+
+/** Synchronous lookup of a model's accepted efforts from the last fetched list, if any. */
+export function cachedModelEfforts(provider: ProviderId, model: string): ReasoningEffort[] | undefined {
+  const models = provider === "claude" ? CLAUDE_MODELS : modelCache.get(provider)?.models;
+  return models?.find((m) => m.id === model)?.efforts;
 }
 
 export function getEffectiveReadOnlyPolicy(

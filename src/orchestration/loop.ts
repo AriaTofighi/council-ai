@@ -22,10 +22,12 @@ import type {
   PriorTurnContext,
   RunDiagnostic,
   RunEvent,
+  EffectiveRunLimits,
   RunLimits,
   WorkspaceSnapshotSummary,
 } from "../types/session.js";
 import { formatPriorConversationContext } from "./context.js";
+import { createActivityForwarder } from "./activity.js";
 import { ParticipantManager } from "./participant-manager.js";
 import {
   buildLeadFeedbackPrompt,
@@ -85,18 +87,39 @@ export interface RunOrchestratedTurnOptions {
 
 export type RunLeadDelegationOptions = RunOrchestratedTurnOptions;
 
+/** A usable limit, or null for "no limit" (absent from the request → default; null/0/negative/NaN → none). */
+function limitValue(value: unknown, fallback: number | null): number | null {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  return Math.round(value);
+}
+
 export function resolveRunLimits(overrides?: Partial<RunLimits>): RunLimits {
   if (!overrides) return { ...DEFAULT_RUN_LIMITS };
+  const d = DEFAULT_RUN_LIMITS;
   return {
-    maxLeadCalls: overrides.maxLeadCalls ?? DEFAULT_RUN_LIMITS.maxLeadCalls,
-    maxTotalCalls: overrides.maxTotalCalls ?? DEFAULT_RUN_LIMITS.maxTotalCalls,
-    perCallTimeoutMs:
-      overrides.perCallTimeoutMs ?? DEFAULT_RUN_LIMITS.perCallTimeoutMs,
-    hardDeadlineMs:
-      overrides.hardDeadlineMs ?? DEFAULT_RUN_LIMITS.hardDeadlineMs,
-    reserveSynthesisCall:
-      overrides.reserveSynthesisCall ?? DEFAULT_RUN_LIMITS.reserveSynthesisCall,
+    maxLeadCalls: limitValue(overrides.maxLeadCalls, d.maxLeadCalls),
+    maxTotalCalls: limitValue(overrides.maxTotalCalls, d.maxTotalCalls),
+    perCallTimeoutMs: limitValue(overrides.perCallTimeoutMs, d.perCallTimeoutMs),
+    hardDeadlineMs: limitValue(overrides.hardDeadlineMs, d.hardDeadlineMs),
+    reserveSynthesisCall: overrides.reserveSynthesisCall ?? d.reserveSynthesisCall,
   };
+}
+
+export function effectiveRunLimits(limits: RunLimits): EffectiveRunLimits {
+  const inf = (n: number | null) => (n === null || n <= 0 ? Infinity : n);
+  return {
+    maxLeadCalls: inf(limits.maxLeadCalls),
+    maxTotalCalls: inf(limits.maxTotalCalls),
+    perCallTimeoutMs: inf(limits.perCallTimeoutMs),
+    hardDeadlineMs: inf(limits.hardDeadlineMs),
+    reserveSynthesisCall: limits.reserveSynthesisCall,
+  };
+}
+
+/** Adapters take 0 to mean "no timeout". */
+export function adapterTimeout(ms: number | null | undefined): number {
+  return ms !== null && ms !== undefined && Number.isFinite(ms) && ms > 0 ? ms : 0;
 }
 
 function nowIso(): string {
@@ -109,7 +132,7 @@ export interface OrchestrationRuntime {
   independentFirstOpinions: boolean;
   startTime: number;
   cwd: string;
-  limits: RunLimits;
+  limits: EffectiveRunLimits;
   allowTools: boolean;
   priorContextText: string;
   manager: ParticipantManager;
@@ -179,7 +202,7 @@ export async function createOrchestrationRuntime(
   const independentFirstOpinions = Boolean(options.independentFirstOpinions);
   const runId = options.runId ?? `run_${crypto.randomUUID().slice(0, 8)}`;
   const cwd = options.snapshot?.snapshotPath ?? options.cwd ?? process.cwd();
-  const limits = resolveRunLimits(options.limits);
+  const limits = effectiveRunLimits(resolveRunLimits(options.limits));
   const adapters = options.adapters ?? createDefaultAdapters();
   const manager = new ParticipantManager(adapters);
 
@@ -258,7 +281,7 @@ export async function createOrchestrationRuntime(
   }
 
   let deadlineTimer: NodeJS.Timeout | undefined;
-  if (limits.hardDeadlineMs > 0) {
+  if (Number.isFinite(limits.hardDeadlineMs)) {
     deadlineTimer = setTimeout(() => {
       isDeadlineExpired = true;
       manager.cancelAll();
@@ -267,8 +290,9 @@ export async function createOrchestrationRuntime(
     deadlineTimer.unref();
   }
 
+  // Infinity when neither a per-call timeout nor a hard deadline is set.
   const remainingDeadlineMs = (): number => {
-    if (limits.hardDeadlineMs <= 0) return limits.perCallTimeoutMs;
+    if (!Number.isFinite(limits.hardDeadlineMs)) return limits.perCallTimeoutMs;
     const elapsed = Date.now() - startTime;
     const rem = limits.hardDeadlineMs - elapsed;
     return Math.max(0, Math.min(limits.perCallTimeoutMs, rem));
@@ -300,6 +324,7 @@ export async function createOrchestrationRuntime(
     }
   };
 
+  const forwardActivity = createActivityForwarder(runId, options.onEvent);
   const buildProviderEventHandler = (
     participantId: string,
   ): ((evt: ProviderEvent) => void) => {
@@ -307,6 +332,7 @@ export async function createOrchestrationRuntime(
       if (evt.type === "fallback_triggered") {
         recordFallbackIfNeeded(participantId);
       }
+      forwardActivity(participantId, evt.provider, evt);
     };
   };
 
@@ -1032,6 +1058,9 @@ export interface SynthesizeFromContributionsOptions {
   allowReadOnlyTools?: boolean;
   adapters?: AdapterRegistry;
   signal?: AbortSignal;
+  /** When set, emits lead_thinking and the lead's live activity for this run. */
+  runId?: string;
+  onEvent?: (event: RunEvent) => void;
 }
 
 export interface SynthesisResult {
@@ -1095,11 +1124,23 @@ export async function synthesizeFromContributions(
     }),
   );
 
+  const forwardActivity = options.runId ? createActivityForwarder(options.runId, options.onEvent) : undefined;
+  if (options.runId) {
+    options.onEvent?.({
+      type: "lead_thinking",
+      runId: options.runId,
+      turn: 1,
+      participantId: options.lead.id,
+      provider: options.lead.provider,
+      mustFinish: true,
+    });
+  }
   const turn = await manager.sendTurn(options.lead.id, {
     prompt: promptParts.join("\n\n"),
     responseSchema: LEAD_ACTION_JSON_SCHEMA,
-    timeoutMs: options.timeoutMs ?? 90_000,
+    timeoutMs: options.timeoutMs === undefined ? 90_000 : adapterTimeout(options.timeoutMs),
     signal: options.signal,
+    onEvent: forwardActivity ? (evt) => forwardActivity(options.lead.id, evt.provider, evt) : undefined,
   });
 
   const summary = manager.getSummary(options.lead.id);

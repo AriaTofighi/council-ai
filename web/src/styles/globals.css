@@ -184,9 +184,19 @@
   .prose-council .md-table-wrap {
     @apply overflow-x-auto rounded-md border border-border;
   }
-  .prose-council table { @apply w-full border-collapse text-[0.8125rem]; }
-  .prose-council th { @apply bg-muted px-3 py-2 text-left font-medium text-muted-foreground; }
-  .prose-council td { @apply border-t border-border px-3 py-2 align-top; }
+  /* Tables wrap between words only (prose's "anywhere" lets columns collapse mid-word). */
+  .prose-council table {
+    @apply w-full border-collapse text-[0.8125rem] leading-[1.55];
+    overflow-wrap: normal;
+  }
+  .prose-council th {
+    @apply bg-muted px-3 py-2 text-left align-bottom text-xs font-medium text-muted-foreground;
+  }
+  .prose-council td { @apply border-t border-border px-3 py-2.5 align-top; }
+  .prose-council td:first-child { @apply font-medium text-foreground; }
+  .prose-council tbody tr { @apply transition-colors duration-(--duration-fast) hover:bg-muted/40; }
+  /* Long file paths inside cells may still break, but at path separators rather than letters. */
+  .prose-council td code { overflow-wrap: anywhere; word-break: normal; }
 }
 
 html.theme-switching *,

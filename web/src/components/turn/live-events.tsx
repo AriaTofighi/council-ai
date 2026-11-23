@@ -85,6 +85,14 @@ export function describeLiveEvent(evt: StoredRunEvent): LiveEventView {
       };
     case "diagnostic":
       return { icon: <TriangleAlert />, tone: "warning", text: String(e.message ?? "Diagnostic") };
+    case "run_resumed":
+      return {
+        icon: <Play />,
+        tone: "signal",
+        text: e.reason === "synthesize" ? "Re-running the lead’s synthesis" : "Retrying a teammate’s assignment",
+      };
+    case "agent_activity":
+      return { icon: <CircleDot />, tone: "neutral", text: String(e.detail ?? e.kind) };
     case "run_finished":
       return { icon: <Flag />, tone: "success", text: `Finished · ${String(e.status)}` };
     default:

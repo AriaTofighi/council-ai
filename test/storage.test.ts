@@ -230,9 +230,21 @@ test("CouncilRunManager retryAssignment reuses completed siblings and produces o
   assert.equal(codexMate.calls, 1);
   assert.equal(agyMate.calls, 1);
 
-  const retried = await manager.retryAssignment(initialRun.id, "asgn_2", {
+  const started = await manager.retryAssignment(initialRun.id, "asgn_2", {
     synthesize: true,
   });
+  // Retries run in the background like a turn: the run is "running" until it settles.
+  assert.equal(started.status, "running");
+  await manager.waitForRun(initialRun.id);
+  const retried = db.getHydratedRun(initialRun.id)!;
+  assert.equal(retried.errorMessage, undefined, "a recovered run drops its old error");
+  const types = db.listRunEvents(initialRun.id).map((e) => e.event.type);
+  const resumedAt = types.lastIndexOf("run_resumed");
+  assert.ok(resumedAt > 0, "retry announces itself with run_resumed");
+  assert.deepEqual(
+    types.slice(resumedAt).filter((t) => t !== "agent_activity"),
+    ["run_resumed", "assignment_started", "assignment_completed", "lead_thinking", "run_finished"],
+  );
 
   // Codex must NOT be re-run when retrying Agy's assignment
   assert.equal(codexMate.calls, 1);

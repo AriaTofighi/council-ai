@@ -17,7 +17,7 @@
     "dev:check": "tsx src/cli/index.ts check",
     "dev:delegate": "tsx src/cli/index.ts delegate",
     "dev:verify-m2": "tsx src/cli/index.ts verify-m2",
-    "dev:serve": "tsx src/cli/index.ts serve",
+    "dev:serve": "tsx watch --clear-screen=false src/cli/index.ts serve",
     "dev:web": "npm --prefix web run dev"
   },
   "devDependencies": {

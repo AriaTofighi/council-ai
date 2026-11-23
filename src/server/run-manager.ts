@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import {
+  adapterTimeout,
   resolveRunLimits,
   runOrchestratedTurn,
   synthesizeFromContributions,
@@ -23,6 +24,8 @@ import type {
   WorkspaceSnapshotSummary,
 } from "../types/session.js";
 import { createReadOnlySnapshot } from "../workspace/snapshot.js";
+import { listProviderModels, normalizeModelSelection } from "../providers/models.js";
+import { createActivityForwarder } from "../orchestration/activity.js";
 
 export interface ParticipantInputSpec {
   provider: ProviderId;
@@ -138,6 +141,13 @@ export class CouncilRunManager {
     await Promise.all(Array.from(this.activeTasks.values()));
   }
 
+  /** Fixes model/effort pairs the CLI would reject (e.g. --effort on agy's Orchestrator). */
+  private async normalizeSpec(spec: ParticipantInputSpec): Promise<ParticipantInputSpec> {
+    if (!spec.model?.trim()) return spec;
+    const models = await listProviderModels(spec.provider, this.executableOverrides[spec.provider]);
+    return { ...spec, ...normalizeModelSelection(spec.provider, spec.model.trim(), spec.effort, models) };
+  }
+
   private buildParticipants(
     leadSpec: ParticipantInputSpec,
     teamSpecs: ParticipantInputSpec[],
@@ -202,8 +212,8 @@ export class CouncilRunManager {
     }
 
     const { lead, teammates } = this.buildParticipants(
-      request.lead,
-      request.teammates,
+      await this.normalizeSpec(request.lead),
+      await Promise.all(request.teammates.map((spec) => this.normalizeSpec(spec))),
     );
     const limits = resolveRunLimits(request.limits);
     const allowReadOnlyTools = request.allowReadOnlyTools ?? true;
@@ -346,6 +356,71 @@ export class CouncilRunManager {
     return true;
   }
 
+  /**
+   * Runs follow-up work on a finished run (retry / re-synthesis) the same way a turn runs:
+   * in the background, marked "running", stoppable, and streaming live events.
+   */
+  private resumeInBackground(
+    runId: string,
+    resumed: Extract<RunEvent, { type: "run_resumed" }>,
+    work: (signal: AbortSignal) => Promise<void>,
+  ): HydratedRun {
+    const started = Date.now();
+    const controller = new AbortController();
+    this.activeAborts.set(runId, controller);
+    this.db.updateRun(runId, { status: "running", errorMessage: undefined });
+    this.emitAndPersistEvent(runId, resumed);
+
+    const task = (async () => {
+      try {
+        await work(controller.signal);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.db.updateRun(runId, { status: "failed", errorMessage: message, completedAt: nowIso() });
+        this.emitAndPersistEvent(runId, {
+          type: "diagnostic",
+          runId,
+          diagnostic: { level: "error", code: "run_exception", message, timestamp: nowIso() },
+        });
+      } finally {
+        // Anything still marked running never got an answer (crash or stop).
+        for (const a of this.db.getHydratedRun(runId)?.assignments ?? []) {
+          if (a.status === "running") {
+            this.db.updateAssignment(runId, {
+              ...a,
+              status: controller.signal.aborted ? "interrupted" : "failed",
+              completedAt: nowIso(),
+            });
+          }
+        }
+        const run = this.db.getHydratedRun(runId);
+        let status = run?.status ?? "failed";
+        if (status === "running") {
+          // Work ended without settling the run (e.g. retry failed, no synthesis).
+          status = controller.signal.aborted
+            ? "interrupted"
+            : run?.finalAnswer
+              ? run.assignments.some((a) => a.status !== "completed")
+                ? "partial"
+                : "completed"
+              : "partial";
+          this.db.updateRun(runId, { status, completedAt: nowIso() });
+        }
+        this.emitAndPersistEvent(runId, {
+          type: "run_finished",
+          runId,
+          status: status as Exclude<typeof status, "running">,
+          elapsedMs: Date.now() - started,
+        });
+        this.activeAborts.delete(runId);
+        this.activeTasks.delete(runId);
+      }
+    })();
+    this.activeTasks.set(runId, task);
+    return this.db.getHydratedRun(runId)!;
+  }
+
+  /** Starts a retry in the background and returns the run (now "running") immediately. */
   async retryAssignment(
     runId: string,
     assignmentLocalId: string,
@@ -371,127 +446,151 @@ export class CouncilRunManager {
       );
     }
 
-    const mateConfig = run.teammatesConfig.find(
+    const storedMate = run.teammatesConfig.find(
       (t) => t.id === assignment.participantId,
     );
-    if (!mateConfig) {
+    if (!storedMate) {
       throw new Error(
         `Participant configuration for "${assignment.participantId}" not found`,
       );
     }
+    // Runs saved before a model's accepted efforts were known may carry an invalid pair.
+    const fixed = await this.normalizeSpec(storedMate);
+    const mateConfig = { ...storedMate, model: fixed.model, effort: fixed.effort };
 
-    assignment.status = "running";
-    assignment.completedAt = undefined;
-    this.db.updateAssignment(runId, assignment);
-    this.emitAndPersistEvent(runId, {
-      type: "assignment_started",
+    return this.resumeInBackground(
       runId,
-      assignment,
-    });
+      { type: "run_resumed", runId, reason: "retry", participantId: mateConfig.id, assignmentId: assignment.id },
+      async (signal) => {
+        assignment.status = "running";
+        assignment.completedAt = undefined;
+        this.db.updateAssignment(runId, assignment);
+        this.emitAndPersistEvent(runId, {
+          type: "assignment_started",
+          runId,
+          assignment,
+        });
 
-    const adapter = this.adapters[mateConfig.provider];
-    const cwd = run.snapshot?.snapshotPath ?? process.cwd();
-    const handle = await adapter.startSession({
-      participantId: `${mateConfig.id}_retry_${crypto.randomUUID().slice(0, 6)}`,
-      executablePath:
-        this.executableOverrides[mateConfig.provider] ?? mateConfig.executablePath,
-      systemPrompt: buildTeammateSystemPrompt(mateConfig, {
-        allowReadOnlyTools: run.allowReadOnlyTools,
-        mode: run.mode,
-        snapshot: run.snapshot,
-      }),
-      cwd,
-      readOnly: true,
-      allowReadOnlyTools: run.allowReadOnlyTools,
-      model: mateConfig.model,
-      effort: mateConfig.effort,
-    });
+        const adapter = this.adapters[mateConfig.provider];
+        const cwd = run.snapshot?.snapshotPath ?? process.cwd();
+        const handle = await adapter.startSession({
+          participantId: `${mateConfig.id}_retry_${crypto.randomUUID().slice(0, 6)}`,
+          executablePath:
+            this.executableOverrides[mateConfig.provider] ?? mateConfig.executablePath,
+          systemPrompt: buildTeammateSystemPrompt(mateConfig, {
+            allowReadOnlyTools: run.allowReadOnlyTools,
+            mode: run.mode,
+            snapshot: run.snapshot,
+          }),
+          cwd,
+          readOnly: true,
+          allowReadOnlyTools: run.allowReadOnlyTools,
+          model: mateConfig.model,
+          effort: mateConfig.effort,
+        });
 
-    const priorTurns = this.db
-      .getPriorTurnsForChat(run.chatId)
-      .filter((t) => t.turnIndex < run.turnIndex);
+        const priorTurns = this.db
+          .getPriorTurnsForChat(run.chatId)
+          .filter((t) => t.turnIndex < run.turnIndex);
 
-    const promptSent = buildTeammateTaskPrompt(run.userMessage, assignment);
-    const turn = await adapter.sendTurn(handle, {
-      prompt: promptSent,
-      timeoutMs: run.limits.perCallTimeoutMs,
-    });
+        const forwardActivity = createActivityForwarder(runId, (e) => this.emitAndPersistEvent(runId, e));
+        const promptSent = buildTeammateTaskPrompt(run.userMessage, assignment);
+        const turn = await adapter.sendTurn(handle, {
+          prompt: promptSent,
+          timeoutMs: adapterTimeout(run.limits.perCallTimeoutMs),
+          signal,
+          onEvent: (evt) => forwardActivity(mateConfig.id, mateConfig.provider, evt),
+        });
 
-    const nextContributionId = `c_${run.contributions.length + 1}`;
-    const isOk = turn.outcome === "ok";
-    const contribution: ContributionRecord = {
-      id: nextContributionId,
-      assignmentId: assignment.id,
-      participantId: mateConfig.id,
-      participantLabel: mateConfig.label,
-      provider: mateConfig.provider,
-      providerSessionId: turn.providerSessionId ?? handle.providerSessionId,
-      continuationMode: turn.continuationMode,
-      fallbackReason: turn.fallbackReason,
-      kind: isOk
-        ? run.mode === "roundtable"
-          ? "roundtable_turn"
-          : "initial_report"
-        : "failure",
-      promptSent,
-      outcome: turn.outcome,
-      content: turn.text,
-      errorMessage: turn.errorMessage,
-      usage: turn.usage,
-      elapsedMs: turn.elapsedMs,
-      createdAt: nowIso(),
-    };
+        const nextContributionId = `c_${run.contributions.length + 1}`;
+        const isOk = turn.outcome === "ok";
+        const contribution: ContributionRecord = {
+          id: nextContributionId,
+          assignmentId: assignment.id,
+          participantId: mateConfig.id,
+          participantLabel: mateConfig.label,
+          provider: mateConfig.provider,
+          providerSessionId: turn.providerSessionId ?? handle.providerSessionId,
+          continuationMode: turn.continuationMode,
+          fallbackReason: turn.fallbackReason,
+          kind: isOk
+            ? run.mode === "roundtable"
+              ? "roundtable_turn"
+              : "initial_report"
+            : "failure",
+          promptSent,
+          outcome: turn.outcome,
+          content: turn.text,
+          errorMessage: turn.errorMessage,
+          usage: turn.usage,
+          elapsedMs: turn.elapsedMs,
+          createdAt: nowIso(),
+        };
 
-    assignment.status = isOk ? "completed" : "failed";
-    assignment.completedAt = nowIso();
-    if (isOk) {
-      assignment.acceptedContributionId = contribution.id;
-    }
+        assignment.status = isOk ? "completed" : signal.aborted ? "interrupted" : "failed";
+        assignment.completedAt = nowIso();
+        if (isOk) {
+          assignment.acceptedContributionId = contribution.id;
+        }
 
-    this.db.insertContribution(runId, contribution);
-    if (isOk) {
-      this.db.supersedeContributionsForAssignment(
-        runId,
-        assignment.id,
-        contribution.id,
-      );
-    }
-    this.db.updateAssignment(runId, assignment);
-    this.db.upsertParticipant(run.chatId, runId, {
-      participantId: mateConfig.id,
-      label: mateConfig.label,
-      provider: mateConfig.provider,
-      role: "teammate",
-      executablePath: handle.executablePath,
-      providerSessionId: handle.providerSessionId,
-      continuationMode: handle.continuationMode,
-      fallbackReason: handle.fallbackReason,
-      model: mateConfig.model,
-      effort: mateConfig.effort,
-      turnCount: handle.turnCount,
-    });
+        this.db.insertContribution(runId, contribution);
+        if (isOk) {
+          this.db.supersedeContributionsForAssignment(
+            runId,
+            assignment.id,
+            contribution.id,
+          );
+        }
+        this.db.updateAssignment(runId, assignment);
+        this.db.upsertParticipant(run.chatId, runId, {
+          participantId: mateConfig.id,
+          label: mateConfig.label,
+          provider: mateConfig.provider,
+          role: "teammate",
+          executablePath: handle.executablePath,
+          providerSessionId: handle.providerSessionId,
+          continuationMode: handle.continuationMode,
+          fallbackReason: handle.fallbackReason,
+          model: mateConfig.model,
+          effort: mateConfig.effort,
+          turnCount: handle.turnCount,
+        });
 
-    this.emitAndPersistEvent(runId, {
-      type: "assignment_completed",
-      runId,
-      assignment,
-      contribution,
-    });
+        this.emitAndPersistEvent(runId, {
+          type: "assignment_completed",
+          runId,
+          assignment,
+          contribution,
+        });
 
-    if (isOk && options.synthesize !== false) {
-      return this.synthesizeRun(runId, priorTurns);
-    }
-
-    return this.db.getHydratedRun(runId)!;
+        if (isOk && options.synthesize !== false && !signal.aborted) {
+          await this.runSynthesis(runId, signal, priorTurns);
+        }
+      },
+    );
   }
 
-  async synthesizeRun(
-    runId: string,
-    preloadedPriorTurns?: ReturnType<CouncilDatabase["getPriorTurnsForChat"]>,
-  ): Promise<HydratedRun> {
+  /** Re-runs the lead's synthesis in the background and returns the run immediately. */
+  async synthesizeRun(runId: string): Promise<HydratedRun> {
     if (this.activeAborts.has(runId)) {
       throw new Error("Cannot synthesize while run is actively executing");
     }
+    const run = this.db.getHydratedRun(runId);
+    if (!run) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    return this.resumeInBackground(
+      runId,
+      { type: "run_resumed", runId, reason: "synthesize", participantId: run.leadConfig.id },
+      (signal) => this.runSynthesis(runId, signal),
+    );
+  }
+
+  private async runSynthesis(
+    runId: string,
+    signal: AbortSignal,
+    preloadedPriorTurns?: ReturnType<CouncilDatabase["getPriorTurnsForChat"]>,
+  ): Promise<void> {
     const run = this.db.getHydratedRun(runId);
     if (!run) {
       throw new Error(`Run not found: ${runId}`);
@@ -519,19 +618,23 @@ export class CouncilRunManager {
       snapshot: run.snapshot,
       contributions: run.contributions,
       cwd: run.snapshot?.snapshotPath ?? process.cwd(),
-      timeoutMs: run.limits.perCallTimeoutMs,
+      timeoutMs: adapterTimeout(run.limits.perCallTimeoutMs),
       allowReadOnlyTools: run.allowReadOnlyTools,
       adapters: this.adapters,
+      signal,
+      runId,
+      onEvent: (e) => this.emitAndPersistEvent(runId, e),
     });
 
     this.db.upsertParticipant(run.chatId, runId, synthesis.leadParticipant);
 
     if (!synthesis.ok) {
       this.db.updateRun(runId, {
-        status: "partial",
+        status: signal.aborted ? "interrupted" : "partial",
         errorMessage: synthesis.errorMessage,
+        completedAt: nowIso(),
       });
-      return this.db.getHydratedRun(runId)!;
+      return;
     }
 
     const hasRemainingFailure = run.assignments.some(
@@ -548,14 +651,5 @@ export class CouncilRunManager {
       errorMessage: undefined,
       completedAt: nowIso(),
     });
-
-    this.emitAndPersistEvent(runId, {
-      type: "run_finished",
-      runId,
-      status: hasRemainingFailure ? "partial" : "completed",
-      elapsedMs: synthesis.elapsedMs,
-    });
-
-    return this.db.getHydratedRun(runId)!;
   }
 }

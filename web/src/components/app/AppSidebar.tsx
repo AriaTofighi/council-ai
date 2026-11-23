@@ -20,8 +20,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { StatusDot, humanize, runStatusTone } from "@/lib/providers";
 import { cn, relativeTime } from "@/lib/utils";
-import type { ChatRecord, ProjectRecord, ProviderCatalogEntry, ProviderCheckResult } from "@/types";
+import type { ChatRecord, CliUpdateStatus, ProviderUsage, ProjectRecord, ProviderCatalogEntry, ProviderCheckResult } from "@/types";
 import { ThemeToggle } from "./ThemeToggle";
+import { peakUsage, usageTone, windowName } from "./UsageMeters";
 
 const COLLAPSED_KEY = "council.projects.collapsed";
 
@@ -45,10 +46,15 @@ interface AppSidebarProps {
   providers: ProviderCatalogEntry[];
   checkResults: ProviderCheckResult[];
   checkingProviders: boolean;
+  cliUpdates?: CliUpdateStatus[];
+  /** Providers being live-tested right now. */
+  checkingIds?: string[];
+  usage?: ProviderUsage[];
   onSelectChat: (chatId: string) => void;
   onNewChat: () => void;
   onDeleteChat: (chatId: string) => void;
   onCheckProviders: () => void;
+  onOpenAgents: () => void;
 }
 
 export const AppSidebar: React.FC<AppSidebarProps> = ({
@@ -62,10 +68,14 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   providers,
   checkResults,
   checkingProviders,
+  cliUpdates = [],
+  checkingIds,
+  usage = [],
   onSelectChat,
   onNewChat,
   onDeleteChat,
   onCheckProviders,
+  onOpenAgents,
 }) => {
   const [pendingDelete, setPendingDelete] = useState<ChatRecord | null>(null);
   const checkByProvider = new Map(checkResults.map((r) => [r.provider, r]));
@@ -257,7 +267,13 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             const check = checkByProvider.get(p.id);
             const found = Boolean(p.discovery.executablePath);
             const status = check ? check.outcome : found ? "ready" : "missing";
-            const tone = checkingProviders ? "signal" : runStatusTone(status);
+            const updating = cliUpdates.find((u) => u.provider === p.id)?.state === "updating";
+            const testing = checkingIds ? checkingIds.includes(p.id) : checkingProviders;
+            const sub = usage.find((u) => u.provider === p.id);
+            const peak = peakUsage(sub);
+            // Near a usage limit outranks "ready": that's what decides if a run will get cut off.
+            const nearLimit = peak !== undefined && peak >= 70;
+            const tone = testing || updating ? "signal" : nearLimit ? usageTone(peak) : runStatusTone(status);
             return (
               <li key={p.id}>
                 <Hint
@@ -265,19 +281,30 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                   label={
                     <span className="flex flex-col gap-0.5">
                       <span>
-                        {p.id} · {humanize(status)}
+                        {p.id} · {updating ? "updating CLI…" : humanize(status)}
                       </span>
                       <span className="font-mono opacity-70">
                         {p.discovery.version ?? p.discovery.executablePath ?? "not found"}
                       </span>
                       {check?.errorMessage && <span className="opacity-70">{check.errorMessage}</span>}
+                      {sub?.groups.map((g, gi) => (
+                        <span key={g.name ?? gi} className="tabular">
+                          {g.name ? `${g.name}: ` : ""}
+                          {g.windows.map((w) => `${windowName(w)} ${Math.round(w.usedPercent)}%`).join(" · ")}
+                        </span>
+                      ))}
                     </span>
                   }
                 >
-                  <span className="flex cursor-default items-center gap-1.5 text-xs text-muted-foreground">
+                  <button
+                    type="button"
+                    onClick={onOpenAgents}
+                    aria-label={`${p.id} details`}
+                    className="flex items-center gap-1.5 rounded text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30"
+                  >
                     <StatusDot tone={tone} />
                     {p.id}
-                  </span>
+                  </button>
                 </Hint>
               </li>
             );

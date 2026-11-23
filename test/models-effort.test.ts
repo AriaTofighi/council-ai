@@ -5,7 +5,9 @@ import { buildClaudeArgs } from "../src/providers/claude.js";
 import { buildCodexArgs } from "../src/providers/codex.js";
 import {
   getEffectiveReadOnlyPolicy,
+  normalizeModelSelection,
   parseAgyModelsOutput,
+  parseCodexCatalog,
 } from "../src/providers/models.js";
 
 test("buildCodexArgs includes model and reasoning effort on initial and resume turns", () => {
@@ -86,19 +88,68 @@ test("buildAgyArgs avoids passing --effort when tiered model slug already encode
   assert.ok(untieredArgs.includes("conv-1"));
 });
 
-test("parseAgyModelsOutput classifies tiered slugs and fast models", () => {
+test("parseAgyModelsOutput groups per-level slugs into families with their exact levels", () => {
   const raw = [
     "Fetching available models...",
-    "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)",
+    "gemini-4-neon-high\tGemini 4 Neon (High)",
+    "gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)",
+    "gemini-4-neon-low\tGemini 4 Neon (Low)",
     "gemini-pro-orchestrator-neon\tOrchestrator (Neon)",
+    "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)",
+    "gpt-oss-120b-medium\tGPT-OSS 120B (Medium)",
   ].join("\n");
   const models = parseAgyModelsOutput(raw);
-  assert.equal(models.length, 2);
-  assert.equal(models[0]?.id, "gemini-3.8-flash-low");
-  assert.equal(models[0]?.supportsEffort, false);
-  assert.equal(models[0]?.isFast, true);
-  assert.equal(models[1]?.id, "gemini-pro-orchestrator-neon");
-  assert.equal(models[1]?.supportsEffort, true);
+  assert.deepEqual(
+    models.map((m) => [m.id, m.label, m.efforts]),
+    [
+      ["gemini-4-neon", "Gemini 4 Neon", ["low", "high", "xhigh"]],
+      ["gemini-pro-orchestrator-neon", "Orchestrator (Neon)", []],
+      ["gemini-3.8-flash", "Gemini 3.8 Flash", ["low"]],
+      ["gpt-oss-120b", "GPT-OSS 120B", ["medium"]],
+    ],
+  );
+  assert.equal(models[1]?.supportsEffort, false);
+  assert.equal(models[2]?.isFast, true);
+});
+
+test("normalizeModelSelection drops efforts a model rejects and migrates per-level agy slugs", () => {
+  const agy = parseAgyModelsOutput(
+    ["gemini-4-neon-high\tGemini 4 Neon (High)", "gemini-4-neon-low\tGemini 4 Neon (Low)", "gemini-pro-orchestrator-neon\tOrchestrator (Neon)"].join("\n"),
+  );
+  assert.deepEqual(normalizeModelSelection("agy", "gemini-pro-orchestrator-neon", "high", agy), {
+    model: "gemini-pro-orchestrator-neon",
+    effort: undefined,
+  });
+  assert.deepEqual(normalizeModelSelection("agy", "gemini-4-neon-high", "low", agy), {
+    model: "gemini-4-neon",
+    effort: "high",
+  });
+  assert.deepEqual(normalizeModelSelection("agy", "gemini-4-neon", "max", agy), {
+    model: "gemini-4-neon",
+    effort: undefined,
+  });
+  assert.deepEqual(normalizeModelSelection("agy", "gemini-4-neon", "low", agy), {
+    model: "gemini-4-neon",
+    effort: "low",
+  });
+});
+
+test("parseCodexCatalog reads per-model reasoning levels and hides hidden models", () => {
+  const models = parseCodexCatalog({
+    models: [
+      {
+        slug: "gpt-6-luna",
+        display_name: "GPT-6 Luna",
+        visibility: "list",
+        default_reasoning_level: "medium",
+        supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "ultra" }],
+      },
+      { slug: "codex-auto-review", visibility: "hide" },
+    ],
+  });
+  assert.equal(models.length, 1);
+  assert.deepEqual(models[0]?.efforts, ["low", "medium"]);
+  assert.equal(models[0]?.defaultEffort, "medium");
 });
 
 test("getEffectiveReadOnlyPolicy describes read-only policies for all providers", () => {

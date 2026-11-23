@@ -12,8 +12,11 @@ export function EffortScale({
   onChange,
   disabled,
   lockedReason,
+  levels,
 }: {
   value?: ReasoningEffort;
+  /** Levels the model accepts; others are shown but can't be picked. */
+  levels?: ReasoningEffort[];
   onChange: (next: ReasoningEffort | undefined) => void;
   disabled?: boolean;
   lockedReason?: string;
@@ -30,6 +33,7 @@ export function EffortScale({
       <div className="flex h-4 items-end gap-[2px]">
         {EFFORT_LEVELS.map((level, i) => {
           const on = i <= activeIdx;
+          const unavailable = levels ? !levels.includes(level) : false;
           return (
             <button
               key={level}
@@ -37,14 +41,19 @@ export function EffortScale({
               role="radio"
               aria-checked={i === activeIdx}
               aria-label={level}
-              disabled={isDisabled}
+              title={unavailable ? `${level} isn’t available for this model` : level}
+              disabled={isDisabled || unavailable}
               onClick={() => onChange(i === activeIdx ? undefined : level)}
               className="group/bar flex h-4 w-2 items-end outline-none focus-visible:ring-2 focus-visible:ring-ring/40 rounded-[2px] disabled:cursor-not-allowed"
             >
               <span
                 className={cn(
                   "block w-full rounded-[2px] transition-[background-color,transform] duration-(--duration-base) ease-spring",
-                  on ? "bg-signal" : "bg-border-strong group-hover/bar:bg-subtle-foreground",
+                  on
+                    ? "bg-signal"
+                    : unavailable
+                      ? "bg-border opacity-40"
+                      : "bg-border-strong group-hover/bar:bg-subtle-foreground",
                 )}
                 style={{ height: `${36 + i * 16}%` }}
               />
@@ -53,7 +62,7 @@ export function EffortScale({
         })}
       </div>
       <span className="w-11 text-[0.6875rem] tabular text-muted-foreground">
-        {lockedReason ? "model" : (value ?? "default")}
+        {lockedReason ? "none" : (value ?? "default")}
       </span>
     </div>
   );

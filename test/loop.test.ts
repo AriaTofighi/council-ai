@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { runLeadDelegation } from "../src/orchestration/loop.js";
+import { DEFAULT_RUN_LIMITS, resolveRunLimits, runLeadDelegation } from "../src/orchestration/loop.js";
 import type { AdapterRegistry } from "../src/providers/registry.js";
 import { sendTurnWithFallback } from "../src/providers/shared.js";
 import type {
@@ -528,4 +528,76 @@ test("sendTurnWithFallback degrades cleanly from failed native resume to transcr
   assert.equal(calls[2]?.resumeId, undefined);
   assert.match(calls[2]!.prompt, /Remember the code 42/);
   assert.ok(events.some((e) => e.type === "fallback_triggered"));
+});
+
+test("resolveRunLimits treats null, 0 and junk as no limit, and missing fields as defaults", () => {
+  const limits = resolveRunLimits({
+    maxLeadCalls: null,
+    maxTotalCalls: 0,
+    perCallTimeoutMs: Number.NaN,
+    reserveSynthesisCall: false,
+  });
+  assert.deepEqual(limits, {
+    maxLeadCalls: null,
+    maxTotalCalls: null,
+    perCallTimeoutMs: null,
+    hardDeadlineMs: DEFAULT_RUN_LIMITS.hardDeadlineMs,
+    reserveSynthesisCall: false,
+  });
+});
+
+test("runLeadDelegation runs with no limits at all and gives adapters no timeout", async () => {
+  const timeouts: number[] = [];
+  let budgetLine = "";
+  const lead = new ScriptedMockAdapter("claude", async (_h, input, turn) => {
+    timeouts.push(input.timeoutMs);
+    if (turn === 1) {
+      return {
+        outcome: "ok",
+        text: "delegate",
+        structured: {
+          action: "delegate",
+          assignments: [{ participant_id: "mate_codex_1", title: "Check", task: "Do it", context_notes: null }],
+          follow_up: null,
+          final_answer: null,
+          used_contribution_ids: null,
+          unresolved_issues: null,
+        },
+        continuationMode: "native",
+        elapsedMs: 1,
+      };
+    }
+    budgetLine = /Budget status:[^\n]*/.exec(input.prompt)?.[0] ?? "";
+    return {
+      outcome: "ok",
+      text: "finish",
+      structured: {
+        action: "finish",
+        assignments: null,
+        follow_up: null,
+        final_answer: "Done.",
+        used_contribution_ids: ["c_1"],
+        unresolved_issues: null,
+      },
+      continuationMode: "native",
+      elapsedMs: 1,
+    };
+  });
+  const mate = new ScriptedMockAdapter("codex", async (_h, input) => {
+    timeouts.push(input.timeoutMs);
+    return { outcome: "ok", text: "Found it.", continuationMode: "native", elapsedMs: 1 };
+  });
+
+  const result = await runLeadDelegation({
+    prompt: "Analyze",
+    lead: { id: "lead_claude_1", label: "claude lead", provider: "claude", role: "lead" },
+    teammates: [{ id: "mate_codex_1", label: "codex", provider: "codex", role: "teammate" }],
+    limits: { maxLeadCalls: null, maxTotalCalls: null, perCallTimeoutMs: null, hardDeadlineMs: null },
+    adapters: makeRegistry({ claude: lead, codex: mate }),
+  });
+
+  assert.equal(result.status, "completed");
+  assert.ok(timeouts.length >= 3);
+  assert.ok(timeouts.every((t) => t === 0), `expected no timeouts, got ${timeouts.join(",")}`);
+  assert.match(budgetLine, /remainingLeadCalls=unlimited, remainingTotalCalls=unlimited/);
 });

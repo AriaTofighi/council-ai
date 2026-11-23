@@ -1,4 +1,5 @@
 import React from "react";
+import { cn } from "@/lib/utils";
 import { CitePill } from "./turn/CitePill";
 
 interface MarkdownViewProps {
@@ -68,6 +69,49 @@ function renderInline(
     parts.push(line.slice(lastIndex));
   }
   return parts;
+}
+
+/** Visible text of a markdown cell (formatting marks and link targets removed). */
+function plainCell(cell: string): string {
+  return cell
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*`]/g, "")
+    .trim();
+}
+
+const NUMERIC_CELL = /^[-+~≈]?\$?\d[\d.,]*\s*(%|\/\s*\d+|x|×)?$/i;
+
+/**
+ * Per-column layout so short columns never wrap and label columns keep a readable width,
+ * leaving the long prose column(s) to absorb the rest.
+ */
+function columnStyles(rows: string[][]): Array<{ className?: string; style?: React.CSSProperties }> {
+  const cols = Math.max(...rows.map((r) => r.length));
+  const stats = Array.from({ length: cols }, (_, c) => {
+    const cells = rows.map((r) => plainCell(r[c] ?? "")).filter(Boolean);
+    const lengths = cells.map((t) => t.length);
+    const max = lengths.length ? Math.max(...lengths) : 0;
+    const avg = lengths.length ? lengths.reduce((a, b) => a + b, 0) / lengths.length : 0;
+    const body = cells.slice(1);
+    const sorted = body.map((t) => t.length).sort((a, b) => a - b);
+    const median = sorted.length ? sorted[Math.floor(sorted.length / 2)]! : 0;
+    const numericShare = body.length ? body.filter((t) => NUMERIC_CELL.test(t)).length / body.length : 0;
+    return { max, avg, median, numeric: numericShare >= 0.75 };
+  });
+  const widest = stats.reduce((best, s, i) => (s.avg > stats[best]!.avg ? i : best), 0);
+  return stats.map((s, i) => {
+    // width:1% shrink-wraps the column to its content so prose columns get the slack.
+    if (s.max <= 18) {
+      return { className: cn("whitespace-nowrap", s.numeric && "tabular"), style: { width: "1%" } };
+    }
+    // Mostly short (scores, counts) with the odd longer note: hug the typical cell, let outliers wrap.
+    if (s.numeric || s.median <= 14) {
+      return { className: cn(s.numeric && "tabular"), style: { width: "1%", minWidth: `${Math.max(s.median, 6)}ch` } };
+    }
+    if (i === widest) return {};
+    // A label-ish column: wide enough for a few words per line, never squeezed to one.
+    return { style: { minWidth: `${Math.min(Math.max(Math.ceil(s.max / 2.5), 12), 24)}ch` } };
+  });
 }
 
 export const MarkdownView: React.FC<MarkdownViewProps> = ({
@@ -169,13 +213,14 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({
       if (rows.length > 0) {
         const header = rows[0]!;
         const body = rows.slice(1);
+        const layout = columnStyles(rows);
         elements.push(
           <div key={`tbl-${i}`} className="md-table-wrap">
             <table>
               <thead>
                 <tr>
                   {header.map((cell, ci) => (
-                    <th key={ci}>
+                    <th key={ci} className={layout[ci]?.className} style={layout[ci]?.style}>
                       {renderInline(cell, validCitationIds, onCiteClick)}
                     </th>
                   ))}
@@ -185,7 +230,7 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({
                 {body.map((row, ri) => (
                   <tr key={ri}>
                     {row.map((cell, ci) => (
-                      <td key={ci}>
+                      <td key={ci} className={layout[ci]?.className} style={layout[ci]?.style}>
                         {renderInline(cell, validCitationIds, onCiteClick)}
                       </td>
                     ))}

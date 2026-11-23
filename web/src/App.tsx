@@ -12,7 +12,9 @@ import {
   deleteProjectApi,
   inspectWorkspaceApi,
   listProjectsApi,
+  fetchUsageApi,
   pickFolderApi,
+  updateClisApi,
   listChatsApi,
   retryAssignmentApi,
   startTurnApi,
@@ -21,6 +23,7 @@ import {
   synthesizeRunApi,
   ServiceUnavailableError,
 } from "./api";
+import { AgentsSheet } from "./components/app/AgentsSheet";
 import { AppSidebar } from "./components/app/AppSidebar";
 import { Suggestions } from "./components/app/Suggestions";
 import { Composer, type ComposerHandle } from "./components/composer/Composer";
@@ -33,12 +36,14 @@ import { Button } from "./components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "./components/ui/sheet";
 import { Hint } from "./components/ui/tooltip";
 import { useMediaQuery } from "./hooks/use-media-query";
-import { type RunLimitsForm } from "./lib/run-config";
+import { normalizeParticipant, type RunLimitsForm } from "./lib/run-config";
 import { loadConfig, saveConfig } from "./lib/persisted-config";
 import { cn } from "./lib/utils";
 import type {
   ChatRecord,
+  CliUpdateStatus,
   HydratedRun,
+  ProviderUsage,
   OrchestrationMode,
   ParticipantSpec,
   ProviderCatalogEntry,
@@ -78,8 +83,13 @@ export const App: React.FC = () => {
   // False until the first conversation has loaded, so we never flash the new-chat layout.
   const [contentReady, setContentReady] = useState(false);
   const [providers, setProviders] = useState<ProviderCatalogEntry[]>([]);
+  const [cliUpdates, setCliUpdates] = useState<CliUpdateStatus[]>([]);
   const [checkResults, setCheckResults] = useState<ProviderCheckResult[]>([]);
-  const [checkingProviders, setCheckingProviders] = useState(false);
+  const [checkingIds, setCheckingIds] = useState<ProviderId[]>([]);
+  const checkingProviders = checkingIds.length > 0;
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  const [usage, setUsage] = useState<ProviderUsage[]>([]);
+  const [refreshingUsage, setRefreshingUsage] = useState(false);
 
   // Last-used config is restored from localStorage once, then saved on every change.
   const [initialConfig] = useState(loadConfig);
@@ -107,6 +117,8 @@ export const App: React.FC = () => {
 
   const activeSubsRef = useRef<Map<string, () => void>>(new Map());
   const workspacePathRef = useRef(workspacePath);
+  // attachRunStream is defined before loadUsage; reach it through a ref.
+  const loadUsageRef = useRef<(refresh?: boolean) => Promise<void>>(async () => {});
   workspacePathRef.current = workspacePath;
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<ComposerHandle>(null);
@@ -128,6 +140,8 @@ export const App: React.FC = () => {
   const attachRunStream = useCallback(
     (runId: string, chatId: string) => {
       if (activeSubsRef.current.has(runId)) return;
+      // Start clean and follow only the current pass (a retry replays from its run_resumed).
+      setLiveEventsByRun((prev) => ({ ...prev, [runId]: [] }));
       const unsub = subscribeRunEvents(runId, 0, (stored) => {
         setLiveEventsByRun((prev) => ({ ...prev, [runId]: [...(prev[runId] ?? []), stored] }));
         const t = stored.event.type;
@@ -136,21 +150,97 @@ export const App: React.FC = () => {
           t === "assignment_completed" ||
           t === "roundtable_turn_completed" ||
           t === "followup_completed" ||
-          t === "lead_action"
+          t === "lead_action" ||
+          t === "run_resumed"
         ) {
           void getRunApi(runId).then((updated) => setRuns((prev) => prev.map((r) => (r.id === runId ? updated : r))));
         }
         if (t === "run_finished") {
+          void loadUsageRef.current(true);
           activeSubsRef.current.get(runId)?.();
           activeSubsRef.current.delete(runId);
           void refreshChat(chatId);
           void listChatsApi().then(setChats);
         }
-      });
+      }, undefined, { sinceResume: true });
       activeSubsRef.current.set(runId, unsub);
     },
     [refreshChat],
   );
+
+  // ── Provider catalog (models + thinking levels) ─────────────
+  const loadProviders = useCallback(async () => {
+    try {
+      const res = await fetchProviders();
+      setProviders(res.providers);
+      setCliUpdates((prev) => {
+        for (const u of res.cliUpdates) {
+          const was = prev.find((p) => p.provider === u.provider)?.state;
+          if (u.state === "updated" && was !== "updated") {
+            toast.success(`${u.provider} CLI updated`, {
+              description: `${u.versionBefore ?? "?"} → ${u.versionAfter ?? "?"} · model list refreshed`,
+            });
+          } else if (u.state === "failed" && was === "updating") {
+            toast.error(`Couldn’t update the ${u.provider} CLI`, { description: u.message });
+          }
+        }
+        return res.cliUpdates;
+      });
+    } catch {
+      // bootstrap handles the offline state
+    }
+  }, []);
+
+  // ── Subscription usage (5-hour / weekly) ────────────────────
+  const loadUsage = useCallback(async (refresh = false) => {
+    if (refresh) setRefreshingUsage(true);
+    try {
+      setUsage(await fetchUsageApi(refresh));
+    } catch {
+      // offline state is handled by bootstrap
+    } finally {
+      if (refresh) setRefreshingUsage(false);
+    }
+  }, []);
+
+  loadUsageRef.current = loadUsage;
+
+  // On load, every 5 minutes, and when the tab regains focus (the server caches for a minute).
+  useEffect(() => {
+    void loadUsage();
+    const timer = window.setInterval(() => void loadUsage(), 5 * 60_000);
+    const onFocus = () => void loadUsage();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [loadUsage]);
+
+  // The server updates the CLIs on startup; poll until that finishes so new models appear.
+  const updatingClis = cliUpdates.some((u) => u.state === "updating");
+  useEffect(() => {
+    if (!updatingClis) return;
+    const timer = window.setInterval(() => void loadProviders(), 4000);
+    return () => window.clearInterval(timer);
+  }, [updatingClis, loadProviders]);
+
+  // Re-read the catalog when the tab regains focus, so model lists never go stale.
+  useEffect(() => {
+    const onFocus = () => void loadProviders();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [loadProviders]);
+
+  // Fix saved or stale selections (old agy per-level slugs, levels a model doesn't accept).
+  useEffect(() => {
+    if (providers.length === 0) return;
+    setLead((prev) => normalizeParticipant(prev, providers));
+    setTeammates((prev) => {
+      const next = prev.map((t) => normalizeParticipant(t, providers));
+      return next.every((t, i) => t === prev[i]) ? prev : next;
+    });
+  }, [providers]);
 
   useEffect(() => {
     let cancelled = false;
@@ -161,9 +251,7 @@ export const App: React.FC = () => {
         const list = await listChatsApi();
         if (cancelled) return;
         toast.dismiss(OFFLINE_TOAST);
-        void fetchProviders()
-          .then(setProviders)
-          .catch(() => {});
+        void loadProviders();
         void listProjectsApi()
           .then(setProjects)
           .catch(() => {});
@@ -339,26 +427,39 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleCheckProviders = async () => {
-    setCheckingProviders(true);
+  const handleCheckProviders = async (ids?: ProviderId[]) => {
+    const targets = ids ?? providers.map((p) => p.id);
+    setCheckingIds((prev) => [...new Set([...prev, ...targets])]);
     try {
-      const results = await checkProvidersApi();
-      setCheckResults(results);
+      const results = await checkProvidersApi(ids);
+      setCheckResults((prev) => [...prev.filter((r) => !results.some((n) => n.provider === r.provider)), ...results]);
       const ok = results.filter((r) => r.outcome === "ok").length;
-      if (ok === results.length) toast.success(`All ${ok} agents responded`);
+      if (results.length === 1) {
+        if (ok) toast.success(`${results[0]!.provider} responded`);
+        else toast.warning(`${results[0]!.provider}: ${results[0]!.errorMessage ?? results[0]!.outcome}`);
+      } else if (ok === results.length) toast.success(`All ${ok} agents responded`);
       else toast.warning(`${ok} of ${results.length} agents responded`);
     } catch (err) {
       toast.error(errorText(err));
     } finally {
-      setCheckingProviders(false);
+      setCheckingIds((prev) => prev.filter((id) => !targets.includes(id)));
+    }
+  };
+
+  const handleUpdateClis = async () => {
+    try {
+      setCliUpdates(await updateClisApi());
+    } catch (err) {
+      toast.error(errorText(err));
     }
   };
 
   const pickFastConfig = (provider: ProviderId): { model?: string; effort?: ReasoningEffort } => {
     const models = providers.find((p) => p.id === provider)?.models ?? [];
     if (provider === "agy") {
-      const fast = models.find((m) => m.id === "gemini-3.8-flash-low") ?? models.find((m) => m.isFast);
-      return { model: fast?.id ?? "gemini-3.8-flash-low", effort: undefined };
+      const fast = models.find((m) => m.id === "gemini-3.8-flash") ?? models.find((m) => m.isFast);
+      const effort = fast?.efforts.includes("low") ? "low" : undefined;
+      return { model: fast?.id, effort };
     }
     if (provider === "claude") {
       const fast = models.find((m) => m.id === "sonnet") ?? models[0];
@@ -496,6 +597,7 @@ export const App: React.FC = () => {
     try {
       const updated = await retryAssignmentApi(runId, assignmentId, true);
       setRuns((prev) => prev.map((r) => (r.id === runId ? updated : r)));
+      if (activeChatId) attachRunStream(runId, activeChatId);
     } catch (err) {
       toast.error(errorText(err));
     } finally {
@@ -508,6 +610,7 @@ export const App: React.FC = () => {
     try {
       const updated = await synthesizeRunApi(runId);
       setRuns((prev) => prev.map((r) => (r.id === runId ? updated : r)));
+      if (activeChatId) attachRunStream(runId, activeChatId);
     } catch (err) {
       toast.error(errorText(err));
     } finally {
@@ -567,10 +670,14 @@ export const App: React.FC = () => {
       providers={providers}
       checkResults={checkResults}
       checkingProviders={checkingProviders}
+      cliUpdates={cliUpdates}
+      checkingIds={checkingIds}
+      usage={usage}
       onSelectChat={handleSelectChat}
       onNewChat={handleNewChat}
       onDeleteChat={handleDeleteChat}
-      onCheckProviders={handleCheckProviders}
+      onCheckProviders={() => void handleCheckProviders()}
+      onOpenAgents={() => setAgentsOpen(true)}
     />
   );
 
@@ -633,6 +740,19 @@ export const App: React.FC = () => {
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background">
+      <AgentsSheet
+        open={agentsOpen}
+        onOpenChange={setAgentsOpen}
+        providers={providers}
+        checkResults={checkResults}
+        checking={checkingIds}
+        cliUpdates={cliUpdates}
+        onTest={(ids) => void handleCheckProviders(ids)}
+        onUpdate={() => void handleUpdateClis()}
+        usage={usage}
+        refreshingUsage={refreshingUsage}
+        onRefreshUsage={() => void loadUsage(true)}
+      />
       {/* Desktop sidebar */}
       <aside
         aria-label="Sidebar"
@@ -681,7 +801,7 @@ export const App: React.FC = () => {
         ) : (
           <>
             <div ref={scrollRef} className="scroll-quiet flex-1 overflow-y-auto">
-              <div className="mx-auto w-full max-w-2xl divide-y px-4 pb-8 sm:px-6">
+              <div className="mx-auto w-full max-w-3xl divide-y px-4 pb-8 sm:px-6">
                 {runs.map((run) => (
                   <TurnView
                     key={run.id}
@@ -695,7 +815,7 @@ export const App: React.FC = () => {
               </div>
             </div>
             <div className="shrink-0 px-4 pb-4 sm:px-6">
-              <div className="mx-auto w-full max-w-2xl">{composer}</div>
+              <div className="mx-auto w-full max-w-3xl">{composer}</div>
             </div>
           </>
         )}

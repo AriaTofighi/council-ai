@@ -203,6 +203,8 @@ export function formatAttributedContributions(
     .join("\n\n");
 }
 
+const fmtBudget = (n: number) => (Number.isFinite(n) ? String(n) : "unlimited");
+
 export function buildLeadFeedbackPrompt(
   contributions: ContributionRecord[],
   budget: {
@@ -215,7 +217,7 @@ export function buildLeadFeedbackPrompt(
   const blocks = formatAttributedContributions(contributions);
   const footer = [
     extraNotice?.trim() ? extraNotice.trim() : undefined,
-    `Budget status: remainingLeadCalls=${budget.remainingLeadCalls}, remainingTotalCalls=${budget.remainingTotalCalls}.`,
+    `Budget status: remainingLeadCalls=${fmtBudget(budget.remainingLeadCalls)}, remainingTotalCalls=${fmtBudget(budget.remainingTotalCalls)}.`,
     budget.mustFinish
       ? 'FINAL CALL NOTICE: You MUST return action="finish" now, synthesizing all attributed contributions and noting unresolved issues or disagreements.'
       : 'Return your next LeadAction JSON ("delegate", "follow_up", "retrieve_contribution", or "finish"). Cite exact contribution IDs in used_contribution_ids when finishing.',

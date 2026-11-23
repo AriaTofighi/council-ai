@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { RotateCcw, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,41 +22,6 @@ export function RunSettings({
   onChangeLimits: (l: RunLimitsForm) => void;
   onChangeAllowReadOnlyTools: (v: boolean) => void;
 }) {
-  const numberField = (
-    id: string,
-    label: string,
-    value: number,
-    unit: string,
-    min: number,
-    max: number,
-    apply: (n: number) => RunLimitsForm,
-  ) => (
-    <div className="flex items-center justify-between gap-3">
-      <Label htmlFor={id} className="font-normal text-muted-foreground">
-        {label}
-      </Label>
-      <div className="relative w-20">
-        <Input
-          id={id}
-          type="number"
-          min={min}
-          max={max}
-          value={value}
-          disabled={disabled}
-          onChange={(e) => {
-            const n = Math.round(Number(e.target.value));
-            if (Number.isFinite(n) && n > 0) onChangeLimits(apply(Math.min(max, n)));
-          }}
-          onBlur={() => value < min && onChangeLimits(apply(min))}
-          className="h-7 pr-7 text-right text-xs tabular"
-        />
-        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[0.6875rem] text-subtle-foreground">
-          {unit}
-        </span>
-      </div>
-    </div>
-  );
-
   return (
     <Popover>
       <Hint label="Limits & tools">
@@ -78,22 +44,41 @@ export function RunSettings({
             <RotateCcw /> Reset
           </Button>
         </div>
-        {numberField("lim-lead", "Lead calls", limits.maxLeadCalls, "×", 1, 20, (n) => ({
-          ...limits,
-          maxLeadCalls: n,
-        }))}
-        {numberField("lim-total", "Total calls", limits.maxTotalCalls, "×", 1, 40, (n) => ({
-          ...limits,
-          maxTotalCalls: n,
-        }))}
-        {numberField("lim-call", "Per-call timeout", Math.round(limits.perCallTimeoutMs / 1000), "s", 5, 600, (n) => ({
-          ...limits,
-          perCallTimeoutMs: n * 1000,
-        }))}
-        {numberField("lim-hard", "Hard deadline", Math.round(limits.hardDeadlineMs / 1000), "s", 10, 1800, (n) => ({
-          ...limits,
-          hardDeadlineMs: n * 1000,
-        }))}
+        <p className="text-[0.6875rem] leading-snug text-subtle-foreground">Leave a field empty for no limit.</p>
+        <LimitField
+          id="lim-lead"
+          label="Lead calls"
+          unit="×"
+          value={limits.maxLeadCalls}
+          disabled={disabled}
+          onChange={(v) => onChangeLimits({ ...limits, maxLeadCalls: v })}
+        />
+        <LimitField
+          id="lim-total"
+          label="Total calls"
+          unit="×"
+          value={limits.maxTotalCalls}
+          disabled={disabled}
+          onChange={(v) => onChangeLimits({ ...limits, maxTotalCalls: v })}
+        />
+        <LimitField
+          id="lim-call"
+          label="Per-call timeout"
+          unit="s"
+          scale={1000}
+          value={limits.perCallTimeoutMs}
+          disabled={disabled}
+          onChange={(v) => onChangeLimits({ ...limits, perCallTimeoutMs: v })}
+        />
+        <LimitField
+          id="lim-hard"
+          label="Hard deadline"
+          unit="s"
+          scale={1000}
+          value={limits.hardDeadlineMs}
+          disabled={disabled}
+          onChange={(v) => onChangeLimits({ ...limits, hardDeadlineMs: v })}
+        />
         <Separator />
         <div className="flex items-center justify-between gap-3">
           <Label htmlFor="sw-synth" className="font-normal text-muted-foreground">
@@ -119,5 +104,70 @@ export function RunSettings({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * A free-form limit: any positive number, or empty for "no limit". `scale` converts the
+ * shown unit to the stored one (seconds shown, milliseconds stored).
+ */
+function LimitField({
+  id,
+  label,
+  unit,
+  value,
+  scale = 1,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  unit: string;
+  value: number | null;
+  scale?: number;
+  disabled?: boolean;
+  onChange: (value: number | null) => void;
+}) {
+  const shown = value === null ? "" : String(Math.round((value / scale) * 100) / 100);
+  const [draft, setDraft] = useState(shown);
+  // Follow outside changes (Reset, restored settings) without fighting the user's typing.
+  useEffect(() => setDraft(shown), [shown]);
+
+  const commit = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed === "") return onChange(null);
+    const n = Number(trimmed);
+    if (Number.isFinite(n) && n > 0) onChange(Math.round(n * scale));
+  };
+  const invalid = draft.trim() !== "" && !(Number(draft) > 0);
+
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <Label htmlFor={id} className="font-normal text-muted-foreground">
+        {label}
+      </Label>
+      <div className="relative w-24">
+        <Input
+          id={id}
+          type="text"
+          inputMode="decimal"
+          placeholder="No limit"
+          value={draft}
+          disabled={disabled}
+          aria-invalid={invalid || undefined}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            commit(e.target.value);
+          }}
+          onBlur={() => setDraft(shown)}
+          className="h-7 pr-6 text-right text-xs tabular placeholder:text-subtle-foreground"
+        />
+        {draft.trim() !== "" && (
+          <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[0.6875rem] text-subtle-foreground">
+            {unit}
+          </span>
+        )}
+      </div>
+    </div>
   );
 }

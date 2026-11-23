@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { LoaderCircle } from "lucide-react";
-import { ProviderMark, StatusDot, runStatusTone } from "@/lib/providers";
 import { formatDuration } from "@/lib/utils";
 import type { HydratedRun, StoredRunEvent } from "@/types";
+import { AgentBoard } from "./AgentBoard";
 import { describeLiveEvent } from "./live-events";
 
 function useElapsed(since: string): number {
@@ -16,9 +16,12 @@ function useElapsed(since: string): number {
 }
 
 export function LiveProgress({ run, events }: { run: HydratedRun; events: StoredRunEvent[] }) {
-  const elapsed = useElapsed(run.createdAt);
-  const latest = events.length ? describeLiveEvent(events[events.length - 1]!) : null;
-  const earlier = events.slice(-5, -1);
+  // A retry streams from its run_resumed event, so time this pass, not the original run.
+  const elapsed = useElapsed(events[0]?.createdAt ?? run.createdAt);
+  // Per-agent activity lives on the board; the headline feed shows orchestration steps.
+  const steps = events.filter((e) => e.event.type !== "agent_activity");
+  const latest = steps.length ? describeLiveEvent(steps[steps.length - 1]!) : null;
+  const earlier = steps.slice(-5, -1);
 
   return (
     <div className="space-y-2 text-xs">
@@ -40,18 +43,7 @@ export function LiveProgress({ run, events }: { run: HydratedRun; events: Stored
         </ol>
       )}
 
-      {run.assignments.length > 0 && (
-        <ul className="divide-y rounded-md border">
-          {run.assignments.map((a) => (
-            <li key={a.id} className="flex items-center gap-2.5 px-3 py-1.5">
-              <ProviderMark provider={a.provider} size="xs" />
-              <span className="shrink-0 font-medium">{a.participantLabel}</span>
-              <span className="min-w-0 flex-1 truncate text-muted-foreground">{a.title}</span>
-              <StatusDot tone={runStatusTone(a.status)} />
-            </li>
-          ))}
-        </ul>
-      )}
+      <AgentBoard run={run} events={events} live />
     </div>
   );
 }
