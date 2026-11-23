@@ -1,4 +1,4 @@
-import type { OrchestrationMode, ParticipantSpec } from "@/types";
+import type { OrchestrationMode, ParticipantSpec, ProviderId } from "@/types";
 import { DEFAULT_LIMITS, type RunLimitsForm } from "./run-config";
 
 const CONFIG_KEY = "council.config.v1";
@@ -70,6 +70,30 @@ export function loadConfig(): PersistedConfig {
     selectedPaths: Array.isArray(raw.selectedPaths)
       ? raw.selectedPaths.filter((p): p is string => typeof p === "string")
       : d.selectedPaths,
+  };
+}
+
+/** True once the user has a saved setup (so first-run defaults shouldn't override it). */
+export function hasSavedConfig(): boolean {
+  try {
+    return localStorage.getItem(CONFIG_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * First-run team built from the CLIs actually installed: lead = first of claude/codex/agy
+ * found, teammates = the rest. Falls back to the stock team if none are detected yet.
+ */
+export function defaultTeamFor(installed: ProviderId[]): Pick<PersistedConfig, "lead" | "teammates"> {
+  const order: ProviderId[] = ["claude", "codex", "agy"];
+  const available = order.filter((p) => installed.includes(p));
+  if (available.length === 0) return { lead: DEFAULT_CONFIG.lead, teammates: DEFAULT_CONFIG.teammates };
+  const [lead, ...rest] = available;
+  return {
+    lead: { provider: lead!, label: `${lead} lead` },
+    teammates: rest.map((p) => ({ id: `init_${p}`, provider: p, label: `${p} teammate #1` })),
   };
 }
 

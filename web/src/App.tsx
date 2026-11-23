@@ -37,7 +37,7 @@ import { Sheet, SheetContent, SheetTitle } from "./components/ui/sheet";
 import { Hint } from "./components/ui/tooltip";
 import { useMediaQuery } from "./hooks/use-media-query";
 import { normalizeParticipant, type RunLimitsForm } from "./lib/run-config";
-import { loadConfig, saveConfig } from "./lib/persisted-config";
+import { defaultTeamFor, hasSavedConfig, loadConfig, saveConfig } from "./lib/persisted-config";
 import { cn } from "./lib/utils";
 import type {
   ChatRecord,
@@ -92,6 +92,7 @@ export const App: React.FC = () => {
   const [refreshingUsage, setRefreshingUsage] = useState(false);
 
   // Last-used config is restored from localStorage once, then saved on every change.
+  const [firstRun] = useState(() => !hasSavedConfig());
   const [initialConfig] = useState(loadConfig);
   const [lead, setLead] = useState<ParticipantSpec>(initialConfig.lead);
   const [teammates, setTeammates] = useState<ParticipantSpec[]>(initialConfig.teammates);
@@ -231,6 +232,17 @@ export const App: React.FC = () => {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [loadProviders]);
+
+  // First launch: start with a team made of the CLIs this machine actually has.
+  const firstRunTeamApplied = useRef(false);
+  useEffect(() => {
+    if (!firstRun || firstRunTeamApplied.current || providers.length === 0) return;
+    firstRunTeamApplied.current = true;
+    const installed = providers.filter((p) => p.discovery.executablePath).map((p) => p.id);
+    const team = defaultTeamFor(installed);
+    setLead(team.lead);
+    setTeammates(team.teammates);
+  }, [firstRun, providers]);
 
   // Fix saved or stale selections (old agy per-level slugs, levels a model doesn't accept).
   useEffect(() => {

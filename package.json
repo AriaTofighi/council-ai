@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
   "type": "module",
   "description": "Local lead-directed coding agent team orchestrating Codex, Claude Code, and Antigravity CLI sessions",
   "bin": {
@@ -15,6 +18,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test dist/test/*.test.js",
     "serve": "node dist/src/cli/index.js serve",
+    "council": "node dist/src/cli/index.js",
     "dev:check": "tsx src/cli/index.ts check",
     "dev:delegate": "tsx src/cli/index.ts delegate",
     "dev:verify-m2": "tsx src/cli/index.ts verify-m2",
